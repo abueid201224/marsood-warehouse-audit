@@ -98,19 +98,24 @@ def tap_text(needle, timeout=40, exact=False):
     return True
 
 
-def tap_tab(name, timeout=20):
-    """يضغط زر تبويب سفلي عبر وصفه الكامل (العقدة القابلة للنقر) لا عبر نص التسمية."""
-    end = time.time() + timeout
-    while time.time() < end:
+def tap_tab(name, expect, attempts=4):
+    """يضغط زر تبويب سفلي ويتأكد من ظهور محتوى الشاشة المقصودة، مع إعادة المحاولة وطباعة التشخيص."""
+    for attempt in range(attempts):
         root = dump()
+        target = None
         if root is not None:
             for n in root.iter("node"):
                 desc = n.attrib.get("content-desc", "")
-                if desc.endswith(", " + name) and n.attrib.get("clickable") == "true":
-                    tap(n)
-                    time.sleep(1.5)
-                    return True
-        time.sleep(1)
+                if desc.endswith(", " + name):
+                    target = n
+                    break
+        print(f"--- تبويب «{name}» محاولة {attempt}: عقدة={'نعم ' + target.attrib.get('bounds', '') + ' clickable=' + target.attrib.get('clickable', '') if target is not None else 'لا'}", flush=True)
+        if target is not None:
+            tap(target)
+        time.sleep(2.5)
+        after = dump()
+        if find(after, expect) is not None:
+            return True
     return False
 
 
@@ -199,10 +204,10 @@ def main():
     check("ترحيل بنواقص", wait_for("رُحِّلت الفاتورة", 15) is not None)
 
     # ---------- لوحة العمل والتقرير ----------
-    tap_tab("لوحة العمل")
+    tap_tab("لوحة العمل", "مراجعة فواتير التجهيز")
     root_ok = wait_for("تقدم المراجعة", 20)
     check("لوحة العمل تعرض التقدم", root_ok is not None)
-    tap_tab("التقرير")
+    tap_tab("التقرير", "تقرير الأخطاء")
     check("شاشة التقرير تعرض أخطاء التجهيز", wait_for("أخطاء التجهيز", 20) is not None)
     root = dump()
     check("التقرير يسرد الكود الخاطئ 9999", find(root, "9999") is not None)
