@@ -116,6 +116,7 @@ def tap_tab(name, expect, attempts=4):
             adb("shell", "input", "tap", str((x1 + x2) // 2), str(y1 + max(8, (y2 - y1) // 6)))
         time.sleep(2.5)
         after = dump()
+        print("    بعد الضغط:", labels(after)[:6], flush=True)
         if find(after, expect) is not None:
             return True
     return False
@@ -138,6 +139,7 @@ def scan(code, terminator="enter", wait=1.2):
 
 
 def main():
+    print("wm size:", adb("shell", "wm", "size").strip(), "| density:", adb("shell", "wm", "density").strip(), flush=True)
     adb("shell", "pm", "grant", PKG, "android.permission.READ_EXTERNAL_STORAGE")
     adb("shell", "am", "start", "-n", f"{PKG}/.MainActivity")
     node = wait_for("مِرصاد المستودع", 90)
