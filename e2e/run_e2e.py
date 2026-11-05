@@ -56,15 +56,29 @@ def find(root, needle, exact=False):
     return best
 
 
+def swipe(up=True):
+    adb("shell", "input", "swipe", "600", "1100" if up else "400", "600", "400" if up else "1100", "300")
+    time.sleep(0.8)
+
+
 def wait_for(needle, timeout=40, exact=False):
+    """يبحث عن النص ويمرّر الشاشة لأسفل عند اللزوم (الأزرار قد تكون خارج الشاشة)."""
     end = time.time() + timeout
     root = None
+    rounds = 0
     while time.time() < end:
         root = dump()
         node = find(root, needle, exact)
         if node is not None:
             return node
-        time.sleep(1.2)
+        rounds += 1
+        if rounds % 8 == 4:
+            for _ in range(3):
+                swipe(up=True)
+        elif rounds % 8 == 0:
+            for _ in range(5):
+                swipe(up=False)
+        time.sleep(1.0)
     print(f"--- لم يظهر «{needle}»؛ العناصر الظاهرة:", flush=True)
     for l in labels(root)[:60]:
         print("   ", l)
@@ -132,13 +146,13 @@ def main():
         time.sleep(2)
     check("اختيار الملف من منتقي أندرويد", picked)
     ok = wait_for("سطر صالح", 40) is not None
-    check("قراءة ملف Excel وعرض المعاينة (3 طلبات / 6 أسطر)", ok)
+    check("قراءة ملف Excel وعرض المعاينة (3 طلبات / 5 أسطر صالحة)", ok)
     if not ok:
         return
     root = dump()
     check("عُرفت العناوين العربية تلقائياً (لا اقتراح ترتيب افتراضي)", find(root, "عُرفت الأعمدة من العناوين") is not None)
     check("أُبلغ عن الصفوف المعيبة بدل إسقاطها بصمت", find(root, "أسطر مستبعدة") is not None)
-    tap_text("استيراد 6 سطر", 20)
+    tap_text("استيراد 5 سطر", 30)
     check("تم الاستيراد", wait_for("تم الاستيراد", 30) is not None)
     tap_text("بدء المسح", 20)
 
