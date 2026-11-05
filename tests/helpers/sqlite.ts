@@ -1,5 +1,9 @@
-import { DatabaseSync } from "node:sqlite";
+import { createRequire } from "node:module";
+import type { DatabaseSync as DatabaseSyncType } from "node:sqlite";
 import { AuditEngine, type Db, type SqlValue } from "../../lib/core/engine";
+
+// vite يحوّل node:sqlite إلى «sqlite» غير الموجودة؛ require يتجاوز ذلك
+const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as { DatabaseSync: new (path: string) => DatabaseSyncType };
 
 /** محوّل node:sqlite لاختبار المحرك على SQLite حقيقية دون جهاز. */
 export function memoryDb(): Db {
