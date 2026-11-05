@@ -98,6 +98,22 @@ def tap_text(needle, timeout=40, exact=False):
     return True
 
 
+def tap_tab(name, timeout=20):
+    """يضغط زر تبويب سفلي عبر وصفه الكامل (العقدة القابلة للنقر) لا عبر نص التسمية."""
+    end = time.time() + timeout
+    while time.time() < end:
+        root = dump()
+        if root is not None:
+            for n in root.iter("node"):
+                desc = n.attrib.get("content-desc", "")
+                if desc.endswith(", " + name) and n.attrib.get("clickable") == "true":
+                    tap(n)
+                    time.sleep(1.5)
+                    return True
+        time.sleep(1)
+    return False
+
+
 def check(name, ok, extra=""):
     print(("PASS  " if ok else "FAIL  ") + name + (f"  [{extra}]" if extra else ""), flush=True)
     if not ok:
@@ -183,10 +199,10 @@ def main():
     check("ترحيل بنواقص", wait_for("رُحِّلت الفاتورة", 15) is not None)
 
     # ---------- لوحة العمل والتقرير ----------
-    tap_text("لوحة العمل", 15, exact=True)
+    tap_tab("لوحة العمل")
     root_ok = wait_for("تقدم المراجعة", 20)
     check("لوحة العمل تعرض التقدم", root_ok is not None)
-    tap_text("التقرير", 15, exact=True)
+    tap_tab("التقرير")
     check("شاشة التقرير تعرض أخطاء التجهيز", wait_for("أخطاء التجهيز", 20) is not None)
     root = dump()
     check("التقرير يسرد الكود الخاطئ 9999", find(root, "9999") is not None)
