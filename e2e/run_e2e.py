@@ -111,7 +111,9 @@ def tap_tab(name, expect, attempts=4):
                     break
         print(f"--- تبويب «{name}» محاولة {attempt}: عقدة={'نعم ' + target.attrib.get('bounds', '') + ' clickable=' + target.attrib.get('clickable', '') if target is not None else 'لا'}", flush=True)
         if target is not None:
-            tap(target)
+            # أعلى الزر بدل منتصفه: في المحاكي اللوحي يغطي شريط المهام الجزء السفلي من الشاشة
+            x1, y1, x2, y2 = map(int, re.findall(r"\d+", target.attrib["bounds"]))
+            adb("shell", "input", "tap", str((x1 + x2) // 2), str(y1 + max(8, (y2 - y1) // 6)))
         time.sleep(2.5)
         after = dump()
         if find(after, expect) is not None:
