@@ -21,20 +21,10 @@ export default function TabLayout() {
         },
       }}
     >
-      <Tabs.Screen
-        name="index"
-        options={{
-          title: "لوحة العمل",
-          tabBarIcon: ({ color, size }) => <MaterialCommunityIcons name="warehouse" color={color} size={size} />,
-        }}
-      />
-      <Tabs.Screen
-        name="sessions"
-        options={{
-          title: "الفواتير",
-          tabBarIcon: ({ color, size }) => <MaterialCommunityIcons name="clipboard-list-outline" color={color} size={size} />,
-        }}
-      />
+      <Tabs.Screen name="index" options={{ title: "لوحة العمل", tabBarIcon: ({ color, size }) => <MaterialCommunityIcons name="warehouse" color={color} size={size} /> }} />
+      <Tabs.Screen name="scan" options={{ title: "المسح", tabBarIcon: ({ color, size }) => <MaterialCommunityIcons name="barcode-scan" color={color} size={size} /> }} />
+      <Tabs.Screen name="invoices" options={{ title: "الفواتير", tabBarIcon: ({ color, size }) => <MaterialCommunityIcons name="clipboard-list-outline" color={color} size={size} /> }} />
+      <Tabs.Screen name="report" options={{ title: "التقرير", tabBarIcon: ({ color, size }) => <MaterialCommunityIcons name="file-document-outline" color={color} size={size} /> }} />
     </Tabs>
   );
 }

@@ -152,6 +152,15 @@ export function Metric({ label, value, accent = palette.ink, icon }: { label: st
   );
 }
 
+export function ProgressBar({ percent, color = palette.teal }: { percent: number; color?: string }) {
+  const value = Math.max(0, Math.min(100, Math.round(percent)));
+  return (
+    <View style={styles.barTrack} accessibilityRole="progressbar" accessibilityValue={{ min: 0, max: 100, now: value }}>
+      <View style={[styles.barFill, { width: `${value}%`, backgroundColor: color }]} />
+    </View>
+  );
+}
+
 export function EmptyState({ icon, title, body, action }: { icon: keyof typeof MaterialCommunityIcons.glyphMap; title: string; body: string; action?: ReactNode }) {
   return (
     <View style={styles.empty}>
@@ -191,6 +200,8 @@ const styles = StyleSheet.create({
   metricTop: { flexDirection: "row", alignItems: "center", gap: 7 },
   metricLabel: { flex: 1, color: palette.muted, textAlign: "right", fontSize: 12, fontWeight: "700" },
   metricValue: { fontSize: 24, fontWeight: "900", marginTop: 10, textAlign: "right" },
+  barTrack: { height: 10, borderRadius: 6, backgroundColor: palette.line, overflow: "hidden" },
+  barFill: { height: 10, borderRadius: 6 },
   empty: { alignItems: "center", justifyContent: "center", paddingHorizontal: 18, paddingVertical: 26, gap: 9 },
   emptyIcon: { width: 58, height: 58, borderRadius: 19, backgroundColor: palette.tealPale, alignItems: "center", justifyContent: "center", marginBottom: 4 },
   emptyTitle: { color: palette.ink, fontSize: 16, fontWeight: "800", textAlign: "center" },
