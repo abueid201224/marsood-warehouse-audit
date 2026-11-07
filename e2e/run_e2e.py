@@ -171,7 +171,7 @@ def ipp_reply(rid, job_id=None):
         out += b"\x02" + b"\x21" + struct.pack(">H", 6) + b"job-id" + struct.pack(">H", 4) + struct.pack(">I", job_id)
     else:
         out += b"\x04" + b"\x42" + struct.pack(">H", 12) + b"printer-name" + struct.pack(">H", 4) + b"Mock"
-        out += b"\x49" + struct.pack(">H", 26) + b"document-format-supported" + struct.pack(">H", 15) + b"application/pdf"
+        out += b"\x49" + struct.pack(">H", 25) + b"document-format-supported" + struct.pack(">H", 15) + b"application/pdf"
         out += b"\x23" + struct.pack(">H", 13) + b"printer-state" + struct.pack(">H", 4) + struct.pack(">I", 3)
     return out + b"\x03"
 
