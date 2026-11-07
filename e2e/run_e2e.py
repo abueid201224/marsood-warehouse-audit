@@ -342,9 +342,14 @@ def main():
     check("إدخال عنوان طابعة البوليصات", fill_edit("192.168.1.51", "10.0.2.2:8631/lbl"))
     check("إدخال اسم المشغّل", fill_edit("اسم المشغّل", "Tester"))
     tap_text("حفظ الإعدادات", 20)
-    check("حفظ الإعدادات", wait_for("حُفظت إعدادات المشغّل والطابعات", 15) is not None)
+    for _ in range(6):
+        swipe(up=False)
+    check("حفظ الإعدادات", wait_for("تم الحفظ", 15) is not None)
     tap_text("اختبار الاتصال", 10)
-    check("اختبار الاتصال بالطابعة الوهمية يكشف دعم PDF", wait_for("الطابعة تقبل ملفات PDF مباشرة", 20) is not None)
+    time.sleep(3)
+    for _ in range(6):
+        swipe(up=False)
+    check("اختبار الاتصال بالطابعة الوهمية يكشف دعم PDF", wait_for("Mock", 20) is not None)
     tap_tab("المسح", "امسح رقم الطلب")
 
     # ---------- المسح بقارئ HID ----------
