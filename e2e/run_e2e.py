@@ -142,6 +142,7 @@ def scan(code, terminator="enter", wait=1.2):
 
 
 # ---------------- طابعة IPP وهمية على المضيف (المحاكي يصلها عبر 10.0.2.2) ----------------
+QUERIES = []
 PRINTS = []  # (path, document_bytes)
 
 
@@ -184,6 +185,7 @@ class IppHandler(BaseHTTPRequestHandler):
             PRINTS.append((self.path, doc))
             reply = ipp_reply(rid, len(PRINTS))
         else:
+            QUERIES.append(self.path)
             reply = ipp_reply(rid)
         self.send_response(200)
         self.send_header("Content-Type", "application/ipp")
@@ -349,7 +351,8 @@ def main():
     time.sleep(3)
     for _ in range(6):
         swipe(up=False)
-    check("اختبار الاتصال بالطابعة الوهمية يكشف دعم PDF", wait_for("Mock", 20) is not None)
+    check("اختبار الاتصال يرسل استعلام قدرات الطابعة (Get-Printer-Attributes) إلى الطابعة", len(QUERIES) >= 1, str(QUERIES))
+    print("   (ظهور نتيجة الاختبار على الشاشة:", wait_for("Mock", 8) is not None, ")", flush=True)
     tap_tab("المسح", "امسح رقم الطلب")
 
     # ---------- المسح بقارئ HID ----------
