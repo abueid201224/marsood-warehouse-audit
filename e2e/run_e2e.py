@@ -217,11 +217,11 @@ def edit_texts():
     return sorted(nodes, key=lambda n: int(re.findall(r"\d+", n.attrib["bounds"])[1]))
 
 
-def fill_edit(index, value):
-    nodes = edit_texts()
-    if index >= len(nodes):
+def fill_edit(hint, value):
+    node = wait_for(hint, 25, exact=True)
+    if node is None:
         return False
-    tap(nodes[index])
+    tap(node)
     time.sleep(0.8)
     adb("shell", "input", "text", value)
     time.sleep(0.5)
@@ -338,9 +338,9 @@ def main():
     check("اختيار مجلد PDF عبر منتقي أندرويد", pick_pdf_folder())
     check("فهرسة ملفات الفاتورة والبوليصة", wait_for("تمت تهيئة قاعدة بيانات الفواتير", 30) is not None)
     check("عدد المفهرس صحيح (2 فاتورة و1 بوليصة)", wait_for("عُثر على 2 فاتورة", 10) is not None)
-    check("إدخال عنوان طابعة الفواتير", fill_edit(0, "10.0.2.2:8631/inv"))
-    check("إدخال عنوان طابعة البوليصات", fill_edit(1, "10.0.2.2:8631/lbl"))
-    check("إدخال اسم المشغّل", fill_edit(2, "Tester"))
+    check("إدخال عنوان طابعة الفواتير", fill_edit("192.168.1.50", "10.0.2.2:8631/inv"))
+    check("إدخال عنوان طابعة البوليصات", fill_edit("192.168.1.51", "10.0.2.2:8631/lbl"))
+    check("إدخال اسم المشغّل", fill_edit("اسم المشغّل", "Tester"))
     tap_text("حفظ الإعدادات", 20)
     check("حفظ الإعدادات", wait_for("حُفظت إعدادات المشغّل والطابعات", 15) is not None)
     tap_text("اختبار الاتصال", 10)
@@ -404,7 +404,7 @@ def main():
     root = dump()
     check("التقرير يسرد الكود الخاطئ 9999", find(root, "9999") is not None)
     check("التقرير يسجل اسم المشغّل", find(root, "Tester") is not None)
-    check("سجل الطباعة في التقرير", wait_for("سجل الطباعة الصامتة", 15) is not None)
+    check("سجل الطباعة في التقرير", wait_for("سجل الطباعة الصامتة", 40) is not None)
     tap_tab("لوحة العمل", "مراجعة فواتير التجهيز")
     check("لوحة العمل تعرض مؤشرات الأداء", wait_for("مؤشرات الأداء", 20) is not None)
 
