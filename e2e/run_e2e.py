@@ -256,8 +256,11 @@ def pick_pdf_folder():
                 time.sleep(2.5)
                 after = dump()
                 print("    بعد الضغط:", labels(after)[:12], flush=True)
-                allow = find_ci(after, "allow")
-                if allow is not None and find_ci(after, "Allow access") is not None or (allow is not None and allow.attrib.get("clickable") == "true"):
+                allow = None
+                for n in (after.iter("node") if after is not None else []):
+                    if n.attrib.get("text", "").strip().upper() == "ALLOW":
+                        allow = n
+                if allow is not None:
                     tap(allow)
                     time.sleep(2)
                     return True
