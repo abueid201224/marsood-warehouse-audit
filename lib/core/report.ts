@@ -1,5 +1,5 @@
 import type { ErrorReport } from "./engine";
-import { escapeHtml, formatDateTime } from "./format";
+import { PRINT_KIND_LABELS, PRINT_STATUS_LABELS, escapeHtml, formatDateTime, formatDuration, formatPercent, formatRate } from "./format";
 
 function table(headers: string[], rows: Array<Array<string | number>>, empty: string): string {
   if (rows.length === 0) return `<p class="empty">${escapeHtml(empty)}</p>`;
@@ -11,9 +11,12 @@ function table(headers: string[], rows: Array<Array<string | number>>, empty: st
 /** تقرير الأخطاء بصيغة HTML عربية RTL قابلة للطباعة (A4). */
 export function buildReportHtml(report: ErrorReport): string {
   const { stats } = report;
-  const wrongRows = report.wrong.map((row, i) => [i + 1, row.orderNo, row.invoices || "—", row.code, row.count, formatDateTime(row.firstAt)]);
-  const overRows = report.over.map((row, i) => [i + 1, row.orderNo, row.invoices || "—", row.code, row.expected ?? "", row.scanned ?? "", row.count, formatDateTime(row.firstAt)]);
+  const wrongRows = report.wrong.map((row, i) => [i + 1, row.orderNo, row.invoices || "—", row.code, row.count, row.operator || "—", formatDateTime(row.firstAt)]);
+  const overRows = report.over.map((row, i) => [i + 1, row.orderNo, row.invoices || "—", row.code, row.expected ?? "", row.scanned ?? "", row.count, row.operator || "—", formatDateTime(row.firstAt)]);
   const shortRows = report.shortages.map((row, i) => [i + 1, row.orderNo, row.invoices || "—", row.code, row.unit || "—", row.expected, row.scanned, row.expected - row.scanned]);
+  const k = report.kpis;
+  const paretoRows = k.pareto.map((row, i) => [i + 1, row.code, row.kind === "wrong" ? "خطأ تجهيز" : "تجهيز زائد", row.count]);
+  const printRows = report.printLog.map((row, i) => [i + 1, row.orderNo, PRINT_KIND_LABELS[row.kind], PRINT_STATUS_LABELS[row.status], row.fileName || "—", row.detail || "—"]);
   const unknownRows = report.unknown.map((row, i) => [i + 1, row.code, formatDateTime(row.at)]);
 
   return `<!doctype html>
@@ -43,15 +46,43 @@ export function buildReportHtml(report: ErrorReport): string {
   <div class="stat"><b>${report.wrong.reduce((n, r) => n + r.count, 0)}</b>أخطاء تجهيز</div>
   <div class="stat"><b>${report.over.reduce((n, r) => n + r.count, 0)}</b>تجهيز زائد</div>
 </div>
+<h2>مؤشرات الأداء</h2>
+<div class="stats">
+  <div class="stat"><b>${escapeHtml(formatPercent(k.accuracy))}</b>دقة المسح</div>
+  <div class="stat"><b>${escapeHtml(formatPercent(k.firstPassYield))}</b>إنجاز من أول مرة (FPY)</div>
+  <div class="stat"><b>${escapeHtml(formatRate(k.unitsPerHour, "وحدة/ساعة"))}</b>معدل الإنتاجية</div>
+  <div class="stat"><b>${escapeHtml(formatRate(k.invoicesPerHour, "فاتورة/ساعة"))}</b>معدل الفواتير</div>
+  <div class="stat"><b>${escapeHtml(formatDuration(k.avgCycleSeconds))}</b>متوسط زمن الفاتورة</div>
+  <div class="stat"><b>${escapeHtml(k.etaMinutes == null ? "—" : formatDuration(k.etaMinutes * 60))}</b>الزمن المتوقع للإنهاء</div>
+</div>
+<h2>أكثر الأكواد تسبباً في الأخطاء (باريتو)</h2>
+${table(["#", "الكود", "النوع", "عدد المرات"], paretoRows, "لا توجد أخطاء.")}
 <h2>أخطاء التجهيز (كود غير موجود في الفاتورة)</h2>
-${table(["#", "رقم الطلب", "رقم الفاتورة", "الكود الممسوح", "عدد المرات", "وقت أول مسح"], wrongRows, "لا توجد أخطاء تجهيز.")}
+${table(["#", "رقم الطلب", "رقم الفاتورة", "الكود الممسوح", "عدد المرات", "المشغّل", "وقت أول مسح"], wrongRows, "لا توجد أخطاء تجهيز.")}
 <h2>التجهيز الزائد (مسح أكثر من الكمية)</h2>
-${table(["#", "رقم الطلب", "رقم الفاتورة", "كود الصنف", "المطلوب", "الممسوح", "الزيادة", "وقت أول مسح"], overRows, "لا يوجد تجهيز زائد.")}
+${table(["#", "رقم الطلب", "رقم الفاتورة", "كود الصنف", "المطلوب", "الممسوح", "الزيادة", "المرات", "المشغّل", "وقت أول مسح"], overRows, "لا يوجد تجهيز زائد.")}
 <h2>النواقص في الفواتير المرحّلة</h2>
 ${table(["#", "رقم الطلب", "رقم الفاتورة", "كود الصنف", "الوحدة", "المطلوب", "الممسوح", "الناقص"], shortRows, "لا توجد نواقص في فواتير مرحّلة.")}
 <h2>مسحات غير مرتبطة بفاتورة</h2>
 ${table(["#", "الكود", "الوقت"], unknownRows, "لا توجد مسحات غير مرتبطة.")}
+<h2>سجل الطباعة الصامتة</h2>
+${table(["#", "رقم الطلب", "المستند", "الحالة", "الملف", "تفاصيل"], printRows, "لم تُنفَّذ مهام طباعة.")}
 </body></html>`;
+}
+
+function csvCell(value: unknown): string {
+  const text = String(value ?? "");
+  return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+/** كل أخطاء المسح والنواقص بصيغة CSV (مع BOM ليفتحها Excel بالعربية صحيحة). */
+export function reportToCsv(report: ErrorReport): string {
+  const rows: Array<Array<string | number>> = [["النوع", "رقم الطلب", "رقم الفاتورة", "الكود", "الوحدة", "المطلوب", "الممسوح", "المرات", "المشغّل", "الوقت"]];
+  report.wrong.forEach((r) => rows.push(["خطأ تجهيز", r.orderNo, r.invoices, r.code, "", "", "", r.count, r.operator, r.firstAt]));
+  report.over.forEach((r) => rows.push(["تجهيز زائد", r.orderNo, r.invoices, r.code, "", r.expected ?? "", r.scanned ?? "", r.count, r.operator, r.firstAt]));
+  report.shortages.forEach((r) => rows.push(["ناقص مرحّل", r.orderNo, r.invoices, r.code, r.unit, r.expected, r.scanned, r.expected - r.scanned, "", ""]));
+  report.unknown.forEach((r) => rows.push(["غير مرتبط", "", "", r.code, "", "", "", 1, "", r.at]));
+  return `\uFEFF${rows.map((row) => row.map(csvCell).join(",")).join("\r\n")}`;
 }
 
 /** نص مختصر لمشاركة التقرير إذا تعذرت الطباعة. */
@@ -64,5 +95,7 @@ export function reportToText(report: ErrorReport): string {
   report.over.forEach((row) => lines.push(`- طلب ${row.orderNo}: كود ${row.code} (مطلوب ${row.expected}، ممسوح ${row.scanned})`));
   lines.push("", "النواقص المرحّلة:");
   report.shortages.forEach((row) => lines.push(`- طلب ${row.orderNo}: كود ${row.code} ناقص ${row.expected - row.scanned}`));
+  const k = report.kpis;
+  lines.push("", `دقة المسح: ${formatPercent(k.accuracy)} | FPY: ${formatPercent(k.firstPassYield)} | الإنتاجية: ${formatRate(k.unitsPerHour, "وحدة/ساعة")}`);
   return lines.join("\n");
 }

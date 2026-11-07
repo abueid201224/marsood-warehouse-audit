@@ -96,6 +96,7 @@ export interface ErrorReportRow {
   firstAt: string;
   expected: number | null;
   scanned: number | null;
+  operator: string;
 }
 export interface ShortageRow {
   orderNo: string;
@@ -116,6 +117,62 @@ export interface ErrorReport {
   over: ErrorReportRow[];
   shortages: ShortageRow[];
   unknown: UnknownScanRow[];
+  kpis: Kpis;
+  printLog: PrintLogRow[];
+}
+
+export type PrintKind = "invoice" | "label";
+export type PrintStatus = "pending" | "printing" | "done" | "failed" | "missing";
+export const PRINT_SUFFIX: Record<PrintKind, string> = { invoice: "_b_Invoice.pdf", label: "_c_Label.pdf" };
+
+export interface PrintConfig {
+  enabled: boolean;
+  folder: string | null;
+  invoicePrinter: string | null;
+  labelPrinter: string | null;
+  operator: string | null;
+}
+export interface PrintFileEntry {
+  refKey: string;
+  kind: PrintKind;
+  name: string;
+  uri: string;
+}
+export interface PrintJob {
+  orderKey: string;
+  kind: PrintKind;
+  attempts: number;
+  /** الأرقام المرجعية بترتيب الأولوية: الرقم الممسوح، ثم رقم الطلب، ثم أرقام الفواتير. */
+  refs: string[];
+}
+export interface PrintLogRow {
+  orderNo: string;
+  invoices: string;
+  kind: PrintKind;
+  status: PrintStatus;
+  detail: string;
+  fileName: string;
+  updatedAt: string;
+}
+export type PrintSummary = Record<PrintStatus, number>;
+
+/** مؤشرات الأداء اللوجستية. null = لا بيانات كافية بعد. */
+export interface Kpis {
+  acceptedUnits: number;
+  /** نسبة المسحات الصحيحة من أول مرة = المقبول ÷ (المقبول + الزائد + الخطأ). */
+  accuracy: number | null;
+  /** First Pass Yield: الفواتير المنتهية بلا أي خطأ تجهيز أو زيادة ÷ المنتهية. */
+  firstPassYield: number | null;
+  avgCycleSeconds: number | null;
+  /** ساعات العمل الفعلي (الفجوات الأطول من دقيقتين بين المسحات لا تُحتسب). */
+  activeHours: number;
+  unitsPerHour: number | null;
+  invoicesPerHour: number | null;
+  remainingUnits: number;
+  etaMinutes: number | null;
+  /** أكثر الأكواد تكراراً في الأخطاء (باريتو). */
+  pareto: Array<{ code: string; kind: "wrong" | "over"; count: number }>;
+  oldestPostedAt: string | null;
 }
 
 /* ------------------------------------------------------------------ */
@@ -148,7 +205,8 @@ CREATE TABLE IF NOT EXISTS invoice_state (
   status TEXT NOT NULL DEFAULT 'new',
   opened_at TEXT,
   closed_at TEXT,
-  posted_at TEXT
+  posted_at TEXT,
+  scanned_ref TEXT
 );
 CREATE TABLE IF NOT EXISTS scans (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -156,10 +214,29 @@ CREATE TABLE IF NOT EXISTS scans (
   item_key TEXT,
   code TEXT NOT NULL,
   kind TEXT NOT NULL,
-  at TEXT NOT NULL
+  at TEXT NOT NULL,
+  operator TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_scans_order ON scans(order_key, item_key, kind);
 CREATE TABLE IF NOT EXISTS app_state (key TEXT PRIMARY KEY NOT NULL, value TEXT);
+CREATE TABLE IF NOT EXISTS print_files (
+  ref_key TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  name TEXT NOT NULL,
+  uri TEXT NOT NULL,
+  PRIMARY KEY (ref_key, kind)
+);
+CREATE TABLE IF NOT EXISTS print_jobs (
+  order_key TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  status TEXT NOT NULL,
+  detail TEXT,
+  file_name TEXT,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (order_key, kind)
+);
 
 DROP VIEW IF EXISTS v_invoice_stats;
 DROP VIEW IF EXISTS v_item_progress;
@@ -249,7 +326,17 @@ export class AuditEngine {
     return this.enqueue(async () => {
       await this.db.exec("PRAGMA journal_mode = WAL;");
       await this.db.exec(SCHEMA);
+      // ترقية قواعد البيانات المنشأة بإصدار سابق
+      await this.addColumnIfMissing("scans", "operator", "TEXT");
+      await this.addColumnIfMissing("invoice_state", "scanned_ref", "TEXT");
+      // مهمة طباعة قُطعت بإغلاق التطبيق تعود إلى الانتظار
+      await this.db.run("UPDATE print_jobs SET status = 'pending' WHERE status = 'printing'");
     });
+  }
+
+  private async addColumnIfMissing(table: string, column: string, type: string) {
+    const columns = await this.db.all<{ name: string }>(`PRAGMA table_info(${table})`);
+    if (!columns.some((c) => c.name === column)) await this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
   }
 
   /* ----------------------------- الاستيراد ----------------------------- */
@@ -307,9 +394,11 @@ export class AuditEngine {
   resetAll(): Promise<void> {
     return this.enqueue(() =>
       this.tx(async () => {
-        for (const table of ["scans", "invoice_state", "lines", "imports", "app_state"]) {
+        for (const table of ["scans", "invoice_state", "lines", "imports", "print_jobs"]) {
           await this.db.run(`DELETE FROM ${table}`);
         }
+        // الإعدادات (الطابعات، المجلد، المراجع) وفهرس PDF يبقيان؛ يُمسح فقط مؤشر الفاتورة الحالية
+        await this.db.run("DELETE FROM app_state WHERE key = 'current_order'");
       }),
     );
   }
@@ -422,7 +511,7 @@ export class AuditEngine {
 
   /** فتح فاتورة من القائمة (بدلاً من مسح بوليصتها). */
   openInvoice(orderKey: string): Promise<ScanResult> {
-    return this.enqueue(() => this.tx(() => this.openOrder(orderKey, null)));
+    return this.enqueue(() => this.tx(() => this.openOrder(orderKey, null, null)));
   }
 
   /* -------------------------------- المسح -------------------------------- */
@@ -443,6 +532,7 @@ export class AuditEngine {
     if (!code) return { type: "empty" };
     const key = codeKey(code);
     const at = this.now();
+    const operator = await this.readSetting("operator");
     const currentKey = await this.readCurrent();
     const current = currentKey ? await this.readInvoice(currentKey) : null;
 
@@ -451,7 +541,7 @@ export class AuditEngine {
       const item = current.items.find((candidate) => candidate.item_key === key);
       if (item) {
         const kind = item.scanned + 1 > item.qty ? "over" : "ok";
-        await this.db.run("INSERT INTO scans (order_key, item_key, code, kind, at) VALUES (?, ?, ?, ?, ?)", [current.invoice.order_key, key, code, kind, at]);
+        await this.db.run("INSERT INTO scans (order_key, item_key, code, kind, at, operator) VALUES (?, ?, ?, ?, ?, ?)", [current.invoice.order_key, key, code, kind, at, operator]);
         return { type: "item", kind, code, orderKey: current.invoice.order_key, scanned: item.scanned + 1, qty: item.qty };
       }
     }
@@ -466,21 +556,21 @@ export class AuditEngine {
     const target = await this.findOrder(key);
     if (target) {
       if (current && current.invoice.order_key === target) return { type: "same-order", orderKey: target };
-      return this.openOrder(target, current?.invoice ?? null);
+      return this.openOrder(target, current?.invoice ?? null, code);
     }
 
     // 4) غير معروف
     if (current && current.invoice.status !== "closed" && fitsItemCode(code)) {
       // كود صنف غير موجود في الفاتورة => خطأ تجهيز
-      await this.db.run("INSERT INTO scans (order_key, item_key, code, kind, at) VALUES (?, ?, ?, 'wrong', ?)", [current.invoice.order_key, key, code, at]);
+      await this.db.run("INSERT INTO scans (order_key, item_key, code, kind, at, operator) VALUES (?, ?, ?, 'wrong', ?, ?)", [current.invoice.order_key, key, code, at, operator]);
       return { type: "item", kind: "wrong", code, orderKey: current.invoice.order_key };
     }
-    await this.db.run("INSERT INTO scans (order_key, item_key, code, kind, at) VALUES (NULL, ?, ?, 'unknown', ?)", [key, code, at]);
+    await this.db.run("INSERT INTO scans (order_key, item_key, code, kind, at, operator) VALUES (NULL, ?, ?, 'unknown', ?, ?)", [key, code, at, operator]);
     return fitsItemCode(code) ? { type: "no-invoice", code } : { type: "order-not-found", code };
   }
 
   /** يغادر الفاتورة الحالية (إن كانت مفتوحة) ثم يفتح الهدف. */
-  private async openOrder(targetKey: string, leaving: InvoiceView | null): Promise<ScanResult> {
+  private async openOrder(targetKey: string, leaving: InvoiceView | null, scannedRef: string | null): Promise<ScanResult> {
     const target = await this.readInvoice(targetKey);
     if (!target) return { type: "order-not-found", code: targetKey };
     let left: LeftInvoice | undefined;
@@ -494,8 +584,8 @@ export class AuditEngine {
       return { type: "order-opened", orderKey: targetKey, orderNo: target.invoice.order_no, readonly: true, resumed: false, left };
     }
     await this.db.run(
-      "INSERT INTO invoice_state (order_key, status, opened_at) VALUES (?, 'open', ?) ON CONFLICT(order_key) DO UPDATE SET status = 'open', opened_at = COALESCE(opened_at, excluded.opened_at)",
-      [targetKey, at],
+      "INSERT INTO invoice_state (order_key, status, opened_at, scanned_ref) VALUES (?, 'open', ?, ?) ON CONFLICT(order_key) DO UPDATE SET status = 'open', opened_at = COALESCE(opened_at, excluded.opened_at), scanned_ref = COALESCE(excluded.scanned_ref, scanned_ref)",
+      [targetKey, at, scannedRef],
     );
     await this.writeCurrent(targetKey);
     return { type: "order-opened", orderKey: targetKey, orderNo: target.invoice.order_no, readonly: false, resumed: status === "posted" || target.invoice.done_qty > 0, left };
@@ -509,6 +599,7 @@ export class AuditEngine {
     if (invoice.short_items === 0) {
       outcome = "closed";
       await this.db.run("UPDATE invoice_state SET status = 'closed', closed_at = ? WHERE order_key = ?", [at, invoice.order_key]);
+      await this.queuePrintIfEnabled(invoice.order_key);
     } else if (touched) {
       outcome = "posted";
       await this.db.run("UPDATE invoice_state SET status = 'posted', posted_at = ? WHERE order_key = ?", [at, invoice.order_key]);
@@ -575,9 +666,10 @@ export class AuditEngine {
         first_at: string;
         qty: number | null;
         scanned: number | null;
+        operator: string | null;
       }>(
         `SELECT s.kind AS kind, o.order_no AS order_no, o.invoices AS invoices, s.code AS code,
-                COUNT(*) AS n, MIN(s.at) AS first_at, p.qty AS qty, p.scanned AS scanned
+                COUNT(*) AS n, MIN(s.at) AS first_at, p.qty AS qty, p.scanned AS scanned, MIN(s.operator) AS operator
          FROM scans s
          LEFT JOIN v_orders o ON o.order_key = s.order_key
          LEFT JOIN v_item_progress p ON p.order_key = s.order_key AND p.item_key = s.item_key
@@ -594,6 +686,7 @@ export class AuditEngine {
         firstAt: row.first_at,
         expected: row.kind === "over" ? row.qty : null,
         scanned: row.kind === "over" ? row.scanned : null,
+        operator: row.operator ?? "",
       });
       const shortages = await this.db.all<{ order_no: string; invoices: string | null; item_code: string; unit: string | null; qty: number; scanned: number }>(
         `SELECT o.order_no, o.invoices, p.item_code, p.unit, p.qty, p.scanned
@@ -612,7 +705,215 @@ export class AuditEngine {
         over: grouped.filter((row) => row.kind === "over").map(toRow),
         shortages: shortages.map((row) => ({ orderNo: row.order_no, invoices: row.invoices ?? "", code: row.item_code, unit: row.unit ?? "", expected: row.qty, scanned: row.scanned })),
         unknown,
+        kpis: await this.readKpis(),
+        printLog: await this.readPrintLog(),
       };
     });
+  }
+
+
+  /* ------------------------------- الإعدادات ----------------------------- */
+
+  private async readSetting(key: string): Promise<string | null> {
+    const [row] = await this.db.all<{ value: string | null }>("SELECT value FROM app_state WHERE key = ?", [`setting:${key}`]);
+    const value = row?.value ?? null;
+    return value === null || value === "" ? null : value;
+  }
+
+  getSetting(key: string): Promise<string | null> {
+    return this.enqueue(() => this.readSetting(key));
+  }
+
+  setSetting(key: string, value: string | null): Promise<void> {
+    return this.enqueue(async () => {
+      await this.db.run("INSERT OR REPLACE INTO app_state (key, value) VALUES (?, ?)", [`setting:${key}`, value]);
+    });
+  }
+
+  getPrintConfig(): Promise<PrintConfig> {
+    return this.enqueue(() => this.readPrintConfig());
+  }
+
+  private async readPrintConfig(): Promise<PrintConfig> {
+    const enabled = await this.readSetting("print_enabled");
+    return {
+      enabled: enabled !== "0",
+      folder: await this.readSetting("pdf_folder"),
+      invoicePrinter: await this.readSetting("printer_invoice"),
+      labelPrinter: await this.readSetting("printer_label"),
+      operator: await this.readSetting("operator"),
+    };
+  }
+
+  /* -------------------------- فهرس ملفات PDF والطباعة -------------------- */
+
+  replacePrintIndex(entries: PrintFileEntry[]): Promise<{ invoices: number; labels: number }> {
+    return this.enqueue(() =>
+      this.tx(async () => {
+        await this.db.run("DELETE FROM print_files");
+        for (let start = 0; start < entries.length; start += 100) {
+          const chunk = entries.slice(start, start + 100);
+          const params: SqlValue[] = [];
+          for (const e of chunk) params.push(e.refKey, e.kind, e.name, e.uri);
+          await this.db.run(`INSERT OR REPLACE INTO print_files (ref_key, kind, name, uri) VALUES ${chunk.map(() => "(?,?,?,?)").join(",")}`, params);
+        }
+        const rows = await this.db.all<{ kind: PrintKind; n: number }>("SELECT kind, COUNT(*) AS n FROM print_files GROUP BY kind");
+        return { invoices: rows.find((r) => r.kind === "invoice")?.n ?? 0, labels: rows.find((r) => r.kind === "label")?.n ?? 0 };
+      }),
+    );
+  }
+
+  printIndexCounts(): Promise<{ invoices: number; labels: number }> {
+    return this.enqueue(async () => {
+      const rows = await this.db.all<{ kind: PrintKind; n: number }>("SELECT kind, COUNT(*) AS n FROM print_files GROUP BY kind");
+      return { invoices: rows.find((r) => r.kind === "invoice")?.n ?? 0, labels: rows.find((r) => r.kind === "label")?.n ?? 0 };
+    });
+  }
+
+  /** يبحث عن ملف بالمراجع بالترتيب (الرقم الممسوح أولاً) مع تجاهل الأصفار البادئة وحالة الحروف. */
+  findPrintFile(refs: string[], kind: PrintKind): Promise<{ ref: string; name: string; uri: string } | null> {
+    return this.enqueue(async () => {
+      for (const ref of refs) {
+        if (!ref) continue;
+        const [row] = await this.db.all<{ name: string; uri: string }>("SELECT name, uri FROM print_files WHERE ref_key = ? AND kind = ?", [codeKey(ref), kind]);
+        if (row) return { ref, name: row.name, uri: row.uri };
+      }
+      return null;
+    });
+  }
+
+  private async queuePrintIfEnabled(orderKey: string) {
+    const cfg = await this.readPrintConfig();
+    if (!cfg.enabled || !cfg.folder) return;
+    await this.insertPrintJobs(orderKey, false);
+  }
+
+  private async insertPrintJobs(orderKey: string, force: boolean) {
+    const at = this.now();
+    for (const kind of ["invoice", "label"] as PrintKind[]) {
+      await this.db.run(
+        `INSERT OR ${force ? "REPLACE" : "IGNORE"} INTO print_jobs (order_key, kind, status, detail, file_name, attempts, created_at, updated_at) VALUES (?, ?, 'pending', NULL, NULL, 0, ?, ?)`,
+        [orderKey, kind, at, at],
+      );
+    }
+  }
+
+  /** إعادة طباعة يدوية لفاتورة منتهية (تعمل حتى لو كانت الطباعة التلقائية معطلة). */
+  requeuePrint(orderKey: string): Promise<void> {
+    return this.enqueue(() => this.tx(() => this.insertPrintJobs(orderKey, true)));
+  }
+
+  /** يأخذ أقدم مهمة منتظرة ويعلّمها «جارية». */
+  nextPrintJob(): Promise<PrintJob | null> {
+    return this.enqueue(() =>
+      this.tx(async () => {
+        const [row] = await this.db.all<{ order_key: string; kind: PrintKind; attempts: number; order_no: string; invoices: string | null; scanned_ref: string | null }>(
+          `SELECT j.order_key, j.kind, j.attempts, o.order_no, o.invoices, st.scanned_ref
+           FROM print_jobs j
+           JOIN v_orders o ON o.order_key = j.order_key
+           LEFT JOIN invoice_state st ON st.order_key = j.order_key
+           WHERE j.status = 'pending'
+           ORDER BY j.created_at, CASE j.kind WHEN 'invoice' THEN 0 ELSE 1 END
+           LIMIT 1`,
+        );
+        if (!row) return null;
+        await this.db.run("UPDATE print_jobs SET status = 'printing', attempts = attempts + 1, updated_at = ? WHERE order_key = ? AND kind = ?", [this.now(), row.order_key, row.kind]);
+        const refs: string[] = [];
+        for (const ref of [row.scanned_ref ?? "", row.order_no, ...(row.invoices ?? "").split(",")]) {
+          const clean = ref.trim();
+          if (clean && !refs.some((r) => codeKey(r) === codeKey(clean))) refs.push(clean);
+        }
+        return { orderKey: row.order_key, kind: row.kind, attempts: row.attempts + 1, refs };
+      }),
+    );
+  }
+
+  finishPrintJob(orderKey: string, kind: PrintKind, status: PrintStatus, detail: string | null, fileName: string | null): Promise<void> {
+    return this.enqueue(async () => {
+      await this.db.run("UPDATE print_jobs SET status = ?, detail = ?, file_name = ?, updated_at = ? WHERE order_key = ? AND kind = ?", [status, detail, fileName, this.now(), orderKey, kind]);
+    });
+  }
+
+  /** يعيد مهام الطباعة الفاشلة/المفقودة إلى الانتظار. */
+  retryPrints(): Promise<number> {
+    return this.enqueue(async () => {
+      const result = await this.db.run("UPDATE print_jobs SET status = 'pending', detail = NULL, updated_at = ? WHERE status IN ('failed', 'missing')", [this.now()]);
+      return result.changes;
+    });
+  }
+
+  printSummary(): Promise<PrintSummary> {
+    return this.enqueue(async () => {
+      const rows = await this.db.all<{ status: PrintStatus; n: number }>("SELECT status, COUNT(*) AS n FROM print_jobs GROUP BY status");
+      const summary: PrintSummary = { pending: 0, printing: 0, done: 0, failed: 0, missing: 0 };
+      for (const row of rows) summary[row.status] = row.n;
+      return summary;
+    });
+  }
+
+  printLog(): Promise<PrintLogRow[]> {
+    return this.enqueue(() => this.readPrintLog());
+  }
+
+  private async readPrintLog(): Promise<PrintLogRow[]> {
+    const rows = await this.db.all<{ order_no: string; invoices: string | null; kind: PrintKind; status: PrintStatus; detail: string | null; file_name: string | null; updated_at: string }>(
+      `SELECT o.order_no, o.invoices, j.kind, j.status, j.detail, j.file_name, j.updated_at
+       FROM print_jobs j JOIN v_orders o ON o.order_key = j.order_key
+       ORDER BY j.updated_at DESC, j.kind LIMIT 400`,
+    );
+    return rows.map((r) => ({ orderNo: r.order_no, invoices: r.invoices ?? "", kind: r.kind, status: r.status, detail: r.detail ?? "", fileName: r.file_name ?? "", updatedAt: r.updated_at }));
+  }
+
+  /* ------------------------------ مؤشرات الأداء --------------------------- */
+
+  getKpis(): Promise<Kpis> {
+    return this.enqueue(() => this.readKpis());
+  }
+
+  private async readKpis(): Promise<Kpis> {
+    const [units] = await this.db.all<{ ok: number; over: number; wrong: number }>(
+      `SELECT COALESCE(SUM(kind = 'ok'), 0) AS ok, COALESCE(SUM(kind = 'over'), 0) AS over, COALESCE(SUM(kind = 'wrong'), 0) AS wrong FROM scans`,
+    );
+    const ok = units?.ok ?? 0;
+    const over = units?.over ?? 0;
+    const wrong = units?.wrong ?? 0;
+    const acceptedUnits = ok + over;
+    const totalScans = ok + over + wrong;
+
+    const [closed] = await this.db.all<{ closed: number; clean: number; cycle: number | null }>(
+      `SELECT COUNT(*) AS closed,
+              COALESCE(SUM(CASE WHEN v.wrong_scans = 0 AND v.over_scans = 0 THEN 1 ELSE 0 END), 0) AS clean,
+              AVG(CASE WHEN v.opened_at IS NOT NULL AND v.closed_at IS NOT NULL THEN (julianday(v.closed_at) - julianday(v.opened_at)) * 86400.0 END) AS cycle
+       FROM v_invoice_stats v WHERE v.status = 'closed'`,
+    );
+    // ساعات العمل الفعلي: مجموع الفجوات بين المسحات المتتالية بحد أقصى دقيقتين للفجوة الواحدة
+    const [active] = await this.db.all<{ seconds: number | null }>(
+      `SELECT SUM(MIN(gap, 120.0)) AS seconds FROM (
+         SELECT (julianday(at) - julianday(LAG(at) OVER (ORDER BY id))) * 86400.0 AS gap
+         FROM scans WHERE kind IN ('ok', 'over', 'wrong')
+       ) WHERE gap IS NOT NULL`,
+    );
+    const activeHours = (active?.seconds ?? 0) / 3600;
+    const [remaining] = await this.db.all<{ units: number | null }>("SELECT SUM(total_qty - done_qty) AS units FROM v_invoice_stats WHERE status <> 'closed'");
+    const remainingUnits = Math.max(0, remaining?.units ?? 0);
+    const unitsPerHour = activeHours > 0 && acceptedUnits > 0 ? acceptedUnits / activeHours : null;
+    const closedCount = closed?.closed ?? 0;
+    const pareto = await this.db.all<{ code: string; kind: "wrong" | "over"; count: number }>(
+      "SELECT code, kind, COUNT(*) AS count FROM scans WHERE kind IN ('wrong', 'over') GROUP BY code, kind ORDER BY count DESC, code LIMIT 5",
+    );
+    const [posted] = await this.db.all<{ at: string | null }>("SELECT MIN(posted_at) AS at FROM invoice_state WHERE status = 'posted'");
+    return {
+      acceptedUnits,
+      accuracy: totalScans > 0 ? Math.round((ok / totalScans) * 1000) / 10 : null,
+      firstPassYield: closedCount > 0 ? Math.round(((closed?.clean ?? 0) / closedCount) * 1000) / 10 : null,
+      avgCycleSeconds: closed?.cycle ?? null,
+      activeHours,
+      unitsPerHour,
+      invoicesPerHour: activeHours > 0 && closedCount > 0 ? closedCount / activeHours : null,
+      remainingUnits,
+      etaMinutes: unitsPerHour ? Math.round((remainingUnits / unitsPerHour) * 60) : null,
+      pareto,
+      oldestPostedAt: posted?.at ?? null,
+    };
   }
 }

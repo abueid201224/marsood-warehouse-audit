@@ -28,3 +28,29 @@ export const STATUS_LABELS = {
   posted: "مرحّلة بنواقص",
   closed: "منتهية",
 } as const;
+
+/** مدة بالثواني بصيغة مختصرة بالعربية (45 ث، 3 د 20 ث، 1 س 05 د). */
+export function formatDuration(seconds: number | null | undefined): string {
+  if (seconds == null || !Number.isFinite(seconds)) return "—";
+  const total = Math.round(seconds);
+  if (total < 60) return `${total} ث`;
+  if (total < 3600) return `${Math.floor(total / 60)} د ${String(total % 60).padStart(2, "0")} ث`;
+  return `${Math.floor(total / 3600)} س ${String(Math.floor((total % 3600) / 60)).padStart(2, "0")} د`;
+}
+
+export function formatRate(value: number | null | undefined, unit: string): string {
+  return value == null || !Number.isFinite(value) ? "—" : `${Math.round(value * 10) / 10} ${unit}`;
+}
+
+export function formatPercent(value: number | null | undefined): string {
+  return value == null ? "—" : `${value}%`;
+}
+
+export const PRINT_STATUS_LABELS = {
+  pending: "بانتظار الطباعة",
+  printing: "جارية",
+  done: "طُبعت",
+  failed: "فشلت",
+  missing: "الملف غير موجود",
+} as const;
+export const PRINT_KIND_LABELS = { invoice: "الفاتورة", label: "البوليصة" } as const;

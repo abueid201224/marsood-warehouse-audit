@@ -1,4 +1,5 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { Switch } from "react-native";
 import { StyleSheet, Text, View } from "react-native";
 import { useFocusEffect } from "expo-router";
 import * as Haptics from "expo-haptics";
@@ -9,6 +10,10 @@ import { itemState, type InvoiceView, type ItemRow, type ScanKind, type ScanResu
 import { STATUS_LABELS, formatClock } from "@/lib/core/format";
 import { useEngine } from "@/lib/core/hooks";
 import { palette } from "@/lib/palette";
+import { usePrintSummary } from "@/lib/print/hooks";
+import { kickPrintQueue } from "@/lib/print/runtime";
+import { PRINT_KIND_LABELS, PRINT_STATUS_LABELS } from "@/lib/core/format";
+import type { PrintLogRow } from "@/lib/core/engine";
 
 type Tone = "info" | "warning" | "danger" | "success";
 interface Feedback {
@@ -78,6 +83,34 @@ export default function ScanScreen() {
   const [recent, setRecent] = useState<Recent>([]);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [busy, setBusy] = useState(false);
+  const [printEnabled, setPrintEnabled] = useState(true);
+  const [printRows, setPrintRows] = useState<PrintLogRow[]>([]);
+  const { summary: printSummary, reload: reloadPrint } = usePrintSummary(engine);
+
+  useEffect(() => {
+    if (!engine) return;
+    engine.getPrintConfig().then((cfg) => setPrintEnabled(cfg.enabled)).catch(() => undefined);
+  }, [engine, focused]);
+
+  // تشغيل الطابور في الخلفية كلما وُجدت مهام منتظرة (الطباعة الصامتة لا تعطّل المسح)
+  useEffect(() => {
+    if (engine && printSummary && printSummary.pending > 0) kickPrintQueue(engine);
+  }, [engine, printSummary]);
+
+  async function togglePrint(value: boolean) {
+    if (!engine) return;
+    setPrintEnabled(value);
+    await engine.setSetting("print_enabled", value ? "1" : "0");
+    setFeedback(value ? { tone: "success", title: "الطباعة التلقائية مفعّلة", body: "ستُطبع فاتورة وبوليصة كل طلب عند إنهائه." } : { tone: "warning", title: "الطباعة التلقائية معطّلة", body: "لن تُطبع المستندات حتى تعيد تفعيلها." });
+  }
+
+  async function reprint() {
+    if (!engine || !view) return;
+    await engine.requeuePrint(view.invoice.order_key);
+    kickPrintQueue(engine);
+    reloadPrint();
+    setFeedback({ tone: "info", title: "بدأت إعادة الطباعة", body: "أُضيفت مهمتا الفاتورة والبوليصة إلى طابور الطباعة." });
+  }
 
   const refresh = useCallback(async () => {
     if (!engine) return;
@@ -89,6 +122,7 @@ export default function ScanScreen() {
     }
     const data = await engine.getInvoice(key);
     setView(data);
+    engine.printLog().then((rows) => setPrintRows(rows)).catch(() => undefined);
     setRecent(data ? await engine.recentScans(key) : []);
   }, [engine]);
 
@@ -109,6 +143,7 @@ export default function ScanScreen() {
         if (next) setFeedback(next);
         buzz(result);
         await refresh();
+        kickPrintQueue(engine);
       } catch (cause) {
         setFeedback({ tone: "danger", title: "تعذر تسجيل المسح", body: cause instanceof Error ? cause.message : "خطأ غير متوقع في قاعدة البيانات." });
       }
@@ -131,6 +166,7 @@ export default function ScanScreen() {
         });
       }
       await refresh();
+      kickPrintQueue(engine);
     } catch (cause) {
       setFeedback({ tone: "danger", title: "تعذر الإنهاء", body: cause instanceof Error ? cause.message : "خطأ غير متوقع." });
     } finally {
@@ -159,6 +195,15 @@ export default function ScanScreen() {
       <Header title="المسح" subtitle="امسح رقم الطلب من البوليصة ثم أصناف الفاتورة" />
       {error ? <Notice title="تعذر فتح قاعدة البيانات" body={error} tone="danger" /> : null}
       <ScannerInput onScan={onScan} disabled={!focused || !engine} />
+      <View style={styles.printBar}>
+        <Switch value={printEnabled} onValueChange={togglePrint} trackColor={{ true: palette.teal, false: palette.line }} accessibilityLabel="الطباعة التلقائية" />
+        <MaterialCommunityIcons name={printEnabled ? "printer-check" : "printer-off"} size={20} color={printEnabled ? palette.tealDeep : palette.red} />
+        <Text style={[styles.printText, { color: printEnabled ? palette.tealDeep : palette.red }]}>
+          {printEnabled ? "الطباعة التلقائية مفعّلة" : "الطباعة التلقائية معطّلة"}
+          {printSummary && printSummary.pending + printSummary.printing > 0 ? ` • قيد الطباعة: ${printSummary.pending + printSummary.printing}` : ""}
+          {printSummary && printSummary.failed + printSummary.missing > 0 ? ` • تحتاج انتباهاً: ${printSummary.failed + printSummary.missing}` : ""}
+        </Text>
+      </View>
       {feedback ? <Notice title={feedback.title} body={feedback.body} tone={tone} /> : null}
 
       {!invoice ? (
@@ -188,6 +233,12 @@ export default function ScanScreen() {
             {readonly ? (
               <>
                 <Notice title="فاتورة منتهية" body="تُعرض للقراءة فقط ولا تقبل مسحاً جديداً." tone="info" />
+                {printRows.filter((r) => r.orderNo === invoice.order_no).map((r) => (
+                  <Text key={r.kind} style={styles.printRow}>
+                    {PRINT_KIND_LABELS[r.kind]}: {PRINT_STATUS_LABELS[r.status]}{r.detail ? ` — ${r.detail}` : ""}
+                  </Text>
+                ))}
+                <Button title="إعادة طباعة الفاتورة والبوليصة" icon="printer-outline" variant="secondary" onPress={reprint} disabled={busy} />
                 <Button title="إغلاق العرض" icon="close" variant="outline" onPress={() => finish("close")} disabled={busy} />
               </>
             ) : (
@@ -248,6 +299,9 @@ export default function ScanScreen() {
 }
 
 const styles = StyleSheet.create({
+  printBar: { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 4 },
+  printText: { flex: 1, fontSize: 13, fontWeight: "800", textAlign: "right" },
+  printRow: { color: palette.inkSoft, fontSize: 12, textAlign: "right" },
   invoiceHead: { flexDirection: "row", alignItems: "center", gap: 12 },
   orderNo: { color: palette.ink, fontSize: 20, fontWeight: "900", textAlign: "right" },
   invoiceNo: { color: palette.muted, fontSize: 13, textAlign: "right", marginTop: 3 },

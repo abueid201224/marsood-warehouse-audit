@@ -25,6 +25,7 @@ export default function TabLayout() {
       <Tabs.Screen name="scan" options={{ title: "المسح", tabBarIcon: ({ color, size }) => <MaterialCommunityIcons name="barcode-scan" color={color} size={size} /> }} />
       <Tabs.Screen name="invoices" options={{ title: "الفواتير", tabBarIcon: ({ color, size }) => <MaterialCommunityIcons name="clipboard-list-outline" color={color} size={size} /> }} />
       <Tabs.Screen name="report" options={{ title: "التقرير", tabBarIcon: ({ color, size }) => <MaterialCommunityIcons name="file-document-outline" color={color} size={size} /> }} />
+      <Tabs.Screen name="settings" options={{ title: "الإعدادات", tabBarIcon: ({ color, size }) => <MaterialCommunityIcons name="cog-outline" color={color} size={size} /> }} />
     </Tabs>
   );
 }

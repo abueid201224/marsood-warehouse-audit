@@ -6,7 +6,8 @@ import { Button, Card, EmptyState, Header, Metric, Notice, Screen, SectionTitle 
 import type { ErrorReport } from "@/lib/core/engine";
 import { formatDateTime } from "@/lib/core/format";
 import { useEngine } from "@/lib/core/hooks";
-import { buildReportHtml, reportToText } from "@/lib/core/report";
+import { buildReportHtml, reportToCsv, reportToText } from "@/lib/core/report";
+import { PRINT_KIND_LABELS, PRINT_STATUS_LABELS } from "@/lib/core/format";
 import { palette } from "@/lib/palette";
 
 export default function ReportScreen() {
@@ -34,6 +35,11 @@ export default function ReportScreen() {
     await Share.share({ message: reportToText(report) }).catch(() => undefined);
   }
 
+  async function shareCsv() {
+    if (!report) return;
+    await Share.share({ message: reportToCsv(report), title: "marsood-report.csv" }).catch(() => undefined);
+  }
+
   const wrongTotal = report?.wrong.reduce((sum, row) => sum + row.count, 0) ?? 0;
   const overTotal = report?.over.reduce((sum, row) => sum + row.count, 0) ?? 0;
   const empty = !!report && wrongTotal === 0 && overTotal === 0 && report.shortages.length === 0 && report.unknown.length === 0;
@@ -52,14 +58,16 @@ export default function ReportScreen() {
           <View style={styles.actions}>
             <View style={styles.action}><Button title="طباعة التقرير" icon="printer-outline" onPress={print} /></View>
             <View style={styles.action}><Button title="مشاركة كنص" icon="share-variant-outline" variant="outline" onPress={share} /></View>
+            <View style={styles.action}><Button title="مشاركة CSV" icon="file-delimited-outline" variant="outline" onPress={shareCsv} /></View>
             <View style={styles.action}><Button title="تحديث" icon="refresh" variant="outline" onPress={load} /></View>
           </View>
           {empty ? <Card><EmptyState icon="check-decagram-outline" title="لا توجد أخطاء" body="لم تُسجَّل أخطاء تجهيز أو تجهيز زائد أو نواقص حتى الآن." /></Card> : null}
 
-          <Section title="أخطاء التجهيز" hint="كود ليس من أصناف الفاتورة" empty="لا توجد أخطاء تجهيز." rows={report.wrong.map((r) => `طلب ${r.orderNo} • فاتورة ${r.invoices || "—"} • كود ${r.code} × ${r.count}`)} color={palette.red} />
+          <Section title="أخطاء التجهيز" hint="كود ليس من أصناف الفاتورة" empty="لا توجد أخطاء تجهيز." rows={report.wrong.map((r) => `طلب ${r.orderNo} • فاتورة ${r.invoices || "—"} • كود ${r.code} × ${r.count}${r.operator ? ` • ${r.operator}` : ""}`)} color={palette.red} />
           <Section title="التجهيز الزائد" hint="مسح أكثر من الكمية المسجلة" empty="لا يوجد تجهيز زائد." rows={report.over.map((r) => `طلب ${r.orderNo} • كود ${r.code} • مطلوب ${r.expected} وممسوح ${r.scanned}`)} color={palette.amber} />
           <Section title="النواقص في الفواتير المرحّلة" hint="أصناف تحتاج استكمالاً" empty="لا توجد نواقص." rows={report.shortages.map((r) => `طلب ${r.orderNo} • كود ${r.code} • ناقص ${r.expected - r.scanned} من ${r.expected}`)} color={palette.amber} />
           <Section title="مسحات غير مرتبطة بفاتورة" hint="رقم طلب غير موجود أو كود بلا فاتورة مفتوحة" empty="لا توجد مسحات غير مرتبطة." rows={report.unknown.map((r) => `${r.code} • ${formatDateTime(r.at)}`)} color={palette.muted} />
+          <Section title="سجل الطباعة الصامتة" hint="حالة طباعة الفاتورة والبوليصة لكل طلب منتهٍ" empty="لم تُنفَّذ مهام طباعة." rows={report.printLog.map((r) => `طلب ${r.orderNo} • ${PRINT_KIND_LABELS[r.kind]}: ${PRINT_STATUS_LABELS[r.status]}${r.detail ? ` — ${r.detail}` : ""}`)} color={palette.blue} />
         </>
       ) : null}
     </Screen>
