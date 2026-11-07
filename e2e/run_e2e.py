@@ -2,8 +2,11 @@
 import re
 import subprocess
 import sys
+import threading
 import time
 import xml.etree.ElementTree as ET
+from http.server import BaseHTTPRequestHandler, HTTPServer
+import struct
 
 PKG = "space.manus.marsood.t173502143869505"
 failures = []
@@ -138,6 +141,140 @@ def scan(code, terminator="enter", wait=1.2):
     time.sleep(wait)
 
 
+# ---------------- طابعة IPP وهمية على المضيف (المحاكي يصلها عبر 10.0.2.2) ----------------
+PRINTS = []  # (path, document_bytes)
+
+
+def parse_ipp(body):
+    """يحلل رسالة IPP ويعيد (رمز العملية، رقم الطلب، طول بيانات المستند)."""
+    code = struct.unpack(">H", body[2:4])[0]
+    rid = struct.unpack(">I", body[4:8])[0]
+    pos = 8
+    while pos < len(body):
+        tag = body[pos]
+        pos += 1
+        if tag == 0x03:
+            return code, rid, body[pos:]
+        if tag <= 0x05:
+            continue
+        nlen = struct.unpack(">H", body[pos:pos + 2])[0]
+        pos += 2 + nlen
+        vlen = struct.unpack(">H", body[pos:pos + 2])[0]
+        pos += 2 + vlen
+    return code, rid, b""
+
+
+def ipp_reply(rid, job_id=None):
+    out = b"\x01\x01" + struct.pack(">H", 0) + struct.pack(">I", rid)
+    out += b"\x01" + b"\x47" + struct.pack(">H", 18) + b"attributes-charset" + struct.pack(">H", 5) + b"utf-8"
+    if job_id is not None:
+        out += b"\x02" + b"\x21" + struct.pack(">H", 6) + b"job-id" + struct.pack(">H", 4) + struct.pack(">I", job_id)
+    else:
+        out += b"\x04" + b"\x42" + struct.pack(">H", 12) + b"printer-name" + struct.pack(">H", 4) + b"Mock"
+        out += b"\x49" + struct.pack(">H", 26) + b"document-format-supported" + struct.pack(">H", 15) + b"application/pdf"
+        out += b"\x23" + struct.pack(">H", 13) + b"printer-state" + struct.pack(">H", 4) + struct.pack(">I", 3)
+    return out + b"\x03"
+
+
+class IppHandler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+        code, rid, doc = parse_ipp(body)
+        if code == 2:
+            PRINTS.append((self.path, doc))
+            reply = ipp_reply(rid, len(PRINTS))
+        else:
+            reply = ipp_reply(rid)
+        self.send_response(200)
+        self.send_header("Content-Type", "application/ipp")
+        self.send_header("Content-Length", str(len(reply)))
+        self.end_headers()
+        self.wfile.write(reply)
+
+    def log_message(self, *args):
+        pass
+
+
+def start_printer():
+    server = HTTPServer(("0.0.0.0", 8631), IppHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+def ime_shown():
+    return "mInputShown=true" in adb("shell", "dumpsys", "input_method")
+
+
+def hide_keyboard():
+    if ime_shown():
+        adb("shell", "input", "keyevent", "4")
+        time.sleep(1)
+
+
+def edit_texts():
+    root = dump()
+    nodes = [n for n in (root.iter("node") if root is not None else []) if n.attrib.get("class") == "android.widget.EditText"]
+    return sorted(nodes, key=lambda n: int(re.findall(r"\d+", n.attrib["bounds"])[1]))
+
+
+def fill_edit(index, value):
+    nodes = edit_texts()
+    if index >= len(nodes):
+        return False
+    tap(nodes[index])
+    time.sleep(0.8)
+    adb("shell", "input", "text", value)
+    time.sleep(0.5)
+    hide_keyboard()
+    return True
+
+
+def find_ci(root, needle):
+    if root is None:
+        return None
+    low = needle.lower()
+    for n in root.iter("node"):
+        for key in ("text", "content-desc"):
+            if low in n.attrib.get(key, "").lower() and n.attrib.get(key, "").strip():
+                return n
+    return None
+
+
+def pick_pdf_folder():
+    """يتنقل في منتقي المجلدات حتى Documents/marsood-pdfs ثم يمنح الصلاحية."""
+    time.sleep(3)
+    for attempt in range(14):
+        root = dump()
+        print(f"--- منتقي المجلد (محاولة {attempt}):", labels(root)[:30], flush=True)
+        use = find_ci(root, "use this folder")
+        title = labels(root)[:6]
+        if use is not None and any("marsood-pdfs" in t for t in title):
+            tap(use)
+            time.sleep(2)
+            allow = wait_for("ALLOW", 10) or find_ci(dump(), "allow")
+            if allow is not None:
+                tap(allow)
+            return True
+        n = find(root, "marsood-pdfs")
+        if n is not None:
+            tap(n)
+        elif find(root, "Documents", exact=True) is not None:
+            tap(find(root, "Documents", exact=True))
+        else:
+            roots = find(root, "Show roots") or find(root, "Show root") or find(root, "Open navigation")
+            drawer_item = find_ci(root, "Android SDK") or find_ci(root, "Internal storage") or find_ci(root, "sdk_gphone")
+            if drawer_item is not None:
+                tap(drawer_item)
+            elif roots is not None:
+                tap(roots)
+        time.sleep(2)
+    return False
+
+
+def count_prints(path_suffix):
+    return sum(1 for p, _ in PRINTS if p.endswith(path_suffix))
+
+
 def main():
     print("wm size:", adb("shell", "wm", "size").strip(), "| density:", adb("shell", "wm", "density").strip(), flush=True)
     adb("shell", "pm", "grant", PKG, "android.permission.READ_EXTERNAL_STORAGE")
@@ -178,7 +315,23 @@ def main():
     check("أُبلغ عن الصفوف المعيبة بدل إسقاطها بصمت", wait_for("أسطر مستبعدة", 25) is not None)
     tap_text("استيراد 5 سطر", 30)
     check("تم الاستيراد", wait_for("تم الاستيراد", 30) is not None)
-    tap_text("بدء المسح", 20)
+
+    # ---------- إعداد الطباعة الصامتة ----------
+    start_printer()
+    tap_tab("الإعدادات", "الطباعة التلقائية")
+    check("شاشة الإعدادات", wait_for("قاعدة بيانات الفواتير", 20) is not None)
+    tap_text("اختيار المجلد وتهيئة الفهرس", 20)
+    check("اختيار مجلد PDF عبر منتقي أندرويد", pick_pdf_folder())
+    check("فهرسة ملفات الفاتورة والبوليصة", wait_for("تمت تهيئة قاعدة بيانات الفواتير", 30) is not None)
+    check("عدد المفهرس صحيح (2 فاتورة و1 بوليصة)", wait_for("عُثر على 2 فاتورة", 10) is not None)
+    check("إدخال عنوان طابعة الفواتير", fill_edit(0, "10.0.2.2:8631/inv"))
+    check("إدخال عنوان طابعة البوليصات", fill_edit(1, "10.0.2.2:8631/lbl"))
+    check("إدخال اسم المشغّل", fill_edit(2, "Tester"))
+    tap_text("حفظ الإعدادات", 20)
+    check("حفظ الإعدادات", wait_for("حُفظت إعدادات المشغّل والطابعات", 15) is not None)
+    tap_text("اختبار الاتصال", 10)
+    check("اختبار الاتصال بالطابعة الوهمية يكشف دعم PDF", wait_for("الطابعة تقبل ملفات PDF مباشرة", 20) is not None)
+    tap_tab("المسح", "امسح رقم الطلب")
 
     # ---------- المسح بقارئ HID ----------
     time.sleep(2)
@@ -200,11 +353,33 @@ def main():
     check("الفاتورة اكتملت 100%", find(root, "100%") is not None)
     tap_text("إنهاء الفاتورة", 15)
     check("إقفال الفاتورة", wait_for("أُنهيت الفاتورة", 15) is not None)
+    deadline = time.time() + 40
+    while time.time() < deadline and not (count_prints("/inv") >= 1 and count_prints("/lbl") >= 1):
+        time.sleep(1)
+    check("طباعة صامتة: الفاتورة أُرسلت إلى طابعتها كملف PDF", count_prints("/inv") == 1 and PRINTS and PRINTS[0][1].startswith(b"%PDF"), str([p for p, _ in PRINTS]))
+    check("طباعة صامتة: البوليصة أُرسلت إلى طابعتها كمهمة منفصلة", count_prints("/lbl") == 1)
     scan("5550001112224")
     check("فتح فاتورة ثانية", wait_for("فُتح الطلب 5550001112224", 15) is not None)
     scan("2001")
     tap_text("ترحيل لاستكمال النواقص", 15)
     check("ترحيل بنواقص", wait_for("رُحِّلت الفاتورة", 15) is not None)
+
+    # ---------- تعطيل الطباعة ----------
+    sw = find(dump(), "الطباعة التلقائية", exact=False)
+    check("مفتاح الطباعة ظاهر في شاشة المسح", sw is not None)
+    if sw is not None:
+        # المفتاح أول عنصر قابل للضغط في الشريط: نضغط على يمين/يسار الشريط حيث المفتاح
+        root = dump()
+        switches = [n for n in root.iter("node") if n.attrib.get("class") == "android.widget.Switch"]
+        tap(switches[0]) if switches else tap(sw)
+    check("تعطيل الطباعة التلقائية", wait_for("الطباعة التلقائية معطّلة", 10) is not None)
+    before = len(PRINTS)
+    scan("5550001112225")
+    scan("3001")
+    tap_text("إنهاء الفاتورة", 15)
+    check("إقفال الفاتورة الثالثة", wait_for("أُنهيت الفاتورة", 15) is not None)
+    time.sleep(8)
+    check("لا طباعة عند تعطيل الخاصية", len(PRINTS) == before, f"{before}->{len(PRINTS)}")
 
     # ---------- لوحة العمل والتقرير ----------
     tap_tab("لوحة العمل", "مراجعة فواتير التجهيز")
@@ -214,6 +389,10 @@ def main():
     check("شاشة التقرير تعرض أخطاء التجهيز", wait_for("أخطاء التجهيز", 20) is not None)
     root = dump()
     check("التقرير يسرد الكود الخاطئ 9999", find(root, "9999") is not None)
+    check("التقرير يسجل اسم المشغّل", find(root, "Tester") is not None)
+    check("سجل الطباعة في التقرير", wait_for("سجل الطباعة الصامتة", 15) is not None)
+    tap_tab("لوحة العمل", "مراجعة فواتير التجهيز")
+    check("لوحة العمل تعرض مؤشرات الأداء", wait_for("مؤشرات الأداء", 20) is not None)
 
 
 try:
