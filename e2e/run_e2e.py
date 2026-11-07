@@ -347,7 +347,7 @@ def main():
     for _ in range(6):
         swipe(up=False)
     check("حفظ الإعدادات", wait_for("تم الحفظ", 15) is not None)
-    tap_text("اختبار الاتصال", 10)
+    tap_text("اختبار الاتصال", 40)
     time.sleep(3)
     for _ in range(6):
         swipe(up=False)
