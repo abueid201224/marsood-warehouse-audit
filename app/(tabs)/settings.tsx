@@ -140,7 +140,8 @@ export default function SettingsScreen() {
       {error ? <Notice title="تعذر فتح قاعدة البيانات" body={error} tone="danger" /> : null}
       {note ? <Notice title={note.title} body={note.body} tone={note.tone} /> : null}
 
-      <Card>
+      <View style={styles.grid}>
+      <Card style={styles.cell}>
         <SectionTitle title="الطباعة التلقائية" hint="عند إنهاء كل طلب تبدأ مهمتان منفصلتان: الفاتورة ثم البوليصة" />
         <View style={styles.switchRow}>
           <Switch value={enabled} onValueChange={toggle} disabled={busy || !engine} trackColor={{ true: palette.teal, false: palette.line }} accessibilityLabel="تفعيل الطباعة التلقائية" />
@@ -154,7 +155,7 @@ export default function SettingsScreen() {
         <Button title="إعادة محاولة الفاشل والمفقود" icon="printer-alert" variant="outline" onPress={retry} disabled={busy || !summary || summary.failed + summary.missing === 0} />
       </Card>
 
-      <Card>
+      <Card style={styles.cell}>
         <SectionTitle title="قاعدة بيانات الفواتير (PDF)" hint="المجلد الذي يحوي «رقم الطلب_b_Invoice.pdf» و«رقم الطلب_c_Label.pdf»" />
         <Text style={styles.line} selectable>{config?.folder ? `المجلد: ${folderLabel(config.folder)}` : "لم يُختر مجلد بعد."}</Text>
         {counts ? <Text style={styles.line}>المفهرس: {counts.invoices} فاتورة • {counts.labels} بوليصة</Text> : null}
@@ -167,7 +168,7 @@ export default function SettingsScreen() {
         <Text style={styles.hint}>يُبحث بنفس الرقم الممسوح (رقم الطلب أو الفاتورة) مع تجاهل الأصفار البادئة. المجلد يُقرأ دون المجلدات الفرعية.</Text>
       </Card>
 
-      <Card>
+      <Card style={styles.cell}>
         <SectionTitle title="الطابعات الشبكية (IPP)" hint="عنوان الطابعة مثل 192.168.1.50 أو ipp://192.168.1.50/ipp/print" />
         <Text style={styles.label}>طابعة الفواتير</Text>
         <TextInput value={invoicePrinter} onChangeText={setInvoicePrinter} placeholder="192.168.1.50" placeholderTextColor={palette.subtle} style={styles.input} autoCapitalize="none" autoCorrect={false} keyboardType="url" textAlign="left" />
@@ -184,17 +185,20 @@ export default function SettingsScreen() {
         <Text style={styles.hint}>الطباعة الصامتة تعمل مع الطابعات التي تدعم IPP واستلام PDF مباشرة، والجهاز على الشبكة المحلية نفسها.</Text>
       </Card>
 
-      <Card>
+      <Card style={styles.cell}>
         <SectionTitle title="المشغّل" hint="يظهر اسمه في تقرير الأخطاء لتتبع المسؤولية" />
         <TextInput value={operator} onChangeText={setOperator} placeholder="اسم المشغّل" placeholderTextColor={palette.subtle} style={styles.input} textAlign="right" />
         <Button title="حفظ الإعدادات" icon="content-save-outline" onPress={saveBasics} disabled={busy || !engine} />
       </Card>
+      </View>
       <SourceSheet visible={sheet === "files"} kind="pdf" onConfirm={addFiles} onCancel={() => setSheet(null)} />
     </Screen>
   );
 }
 
 const styles = StyleSheet.create({
+  grid: { flexDirection: "row", flexWrap: "wrap", gap: 16, alignItems: "flex-start" },
+  cell: { flexGrow: 1, flexShrink: 1, flexBasis: 360, minWidth: 0 },
   switchRow: { flexDirection: "row", alignItems: "center", gap: 12 },
   switchText: { fontSize: 16, fontWeight: "900" },
   line: { color: palette.inkSoft, fontSize: 13, textAlign: "right" },

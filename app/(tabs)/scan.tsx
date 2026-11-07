@@ -10,6 +10,7 @@ import { itemState, type InvoiceView, type ItemRow, type ScanKind, type ScanResu
 import { STATUS_LABELS, formatClock } from "@/lib/core/format";
 import { useEngine } from "@/lib/core/hooks";
 import { palette } from "@/lib/palette";
+import { useLayout } from "@/lib/layout";
 import { usePrintSummary } from "@/lib/print/hooks";
 import { kickPrintQueue } from "@/lib/print/runtime";
 import { PRINT_KIND_LABELS, PRINT_STATUS_LABELS } from "@/lib/core/format";
@@ -78,6 +79,7 @@ const KIND_COLOR: Record<ScanKind, string> = { ok: palette.tealDeep, over: palet
 
 export default function ScanScreen() {
   const { engine, error } = useEngine();
+  const { isWide } = useLayout();
   const [focused, setFocused] = useState(false);
   const [view, setView] = useState<View_ | null>(null);
   const [recent, setRecent] = useState<Recent>([]);
@@ -94,8 +96,8 @@ export default function ScanScreen() {
 
   // تشغيل الطابور في الخلفية كلما وُجدت مهام منتظرة (الطباعة الصامتة لا تعطّل المسح)
   useEffect(() => {
-    if (engine && printSummary && printSummary.pending > 0) kickPrintQueue(engine);
-  }, [engine, printSummary]);
+    if (engine && (printSummary?.pending ?? 0) > 0) kickPrintQueue(engine);
+  }, [engine, printSummary?.pending]);
 
   async function togglePrint(value: boolean) {
     if (!engine) return;
@@ -120,10 +122,11 @@ export default function ScanScreen() {
       setRecent([]);
       return;
     }
-    const data = await engine.getInvoice(key);
+    // استعلامات مستقلة تُنفّذ معاً بدل التتابع بعد كل مسحة (أقل زمن استجابة للقارئ)
+    const [data, scans] = await Promise.all([engine.getInvoice(key), engine.recentScans(key)]);
     setView(data);
-    engine.printLog().then((rows) => setPrintRows(rows)).catch(() => undefined);
-    setRecent(data ? await engine.recentScans(key) : []);
+    setRecent(data ? scans : []);
+    if (data?.invoice.status === "closed") engine.printLog().then(setPrintRows).catch(() => undefined);
   }, [engine]);
 
   useFocusEffect(
@@ -211,7 +214,95 @@ export default function ScanScreen() {
           <EmptyState icon="barcode-scan" title="لا توجد فاتورة مفتوحة" body="امسح رقم الطلب المطبوع على البوليصة لفتح فاتورته، ثم امسح أصنافها واحداً واحداً." />
         </Card>
       ) : (
-        <>
+        isWide ? (
+          <View style={styles.panes}>
+            <View style={styles.paneSide}>
+          <Card>
+            <View style={styles.invoiceHead}>
+              <StatusBadge state={invoice.status === "closed" ? "good" : invoice.status === "posted" ? "warning" : "neutral"} label={STATUS_LABELS[invoice.status]} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.orderNo} selectable>طلب {invoice.order_no}</Text>
+                <Text style={styles.invoiceNo} selectable>الفاتورة: {invoice.invoices ?? "—"}</Text>
+              </View>
+              <Text style={styles.percent}>{invoice.progress}%</Text>
+            </View>
+            <ProgressBar percent={invoice.progress} color={invoice.short_items === 0 ? palette.teal : palette.amber} />
+            <Text style={styles.progressText}>
+              {invoice.done_qty} من {invoice.total_qty} وحدة • {invoice.done_items} من {invoice.item_count} صنف مكتمل
+            </Text>
+            <View style={styles.metricRow}>
+              <Metric label="نواقص" value={String(invoice.short_items)} icon="package-variant-closed-remove" accent={invoice.short_items ? palette.amber : palette.tealDeep} />
+              <Metric label="أخطاء تجهيز" value={String(invoice.wrong_scans)} icon="close-octagon-outline" accent={invoice.wrong_scans ? palette.red : palette.tealDeep} />
+              <Metric label="تجهيز زائد" value={String(invoice.over_scans)} icon="plus-circle-outline" accent={invoice.over_scans ? palette.amber : palette.tealDeep} />
+            </View>
+            {readonly ? (
+              <>
+                <Notice title="فاتورة منتهية" body="تُعرض للقراءة فقط ولا تقبل مسحاً جديداً." tone="info" />
+                {printRows.filter((r) => r.orderNo === invoice.order_no).map((r) => (
+                  <Text key={r.kind} style={styles.printRow}>
+                    {PRINT_KIND_LABELS[r.kind]}: {PRINT_STATUS_LABELS[r.status]}{r.detail ? ` — ${r.detail}` : ""}
+                  </Text>
+                ))}
+                <Button title="إعادة طباعة الفاتورة والبوليصة" icon="printer-outline" variant="secondary" onPress={reprint} disabled={busy} />
+                <Button title="إغلاق العرض" icon="close" variant="outline" onPress={() => finish("close")} disabled={busy} />
+              </>
+            ) : (
+              <View style={styles.actions}>
+                <View style={styles.action}>
+                  <Button title="إنهاء الفاتورة" icon="check-circle-outline" onPress={() => finish("close")} disabled={busy || invoice.short_items > 0} />
+                </View>
+                <View style={styles.action}>
+                  <Button title="ترحيل لاستكمال النواقص" icon="arrow-right-bold-box-outline" variant="secondary" onPress={() => finish("post")} disabled={busy || invoice.short_items === 0} />
+                </View>
+                <View style={styles.action}>
+                  <Button title="تراجع عن آخر مسح" icon="undo" variant="outline" onPress={undo} disabled={busy || recent.length === 0} />
+                </View>
+              </View>
+            )}
+          </Card>
+
+          {recent.length > 0 ? (
+            <Card>
+              <SectionTitle title="آخر المسحات" />
+              {recent.map((scan) => (
+                <View key={scan.id} style={styles.recentRow}>
+                  <MaterialCommunityIcons name={scan.kind === "ok" ? "check-circle-outline" : "alert-circle-outline"} size={18} color={KIND_COLOR[scan.kind]} />
+                  <Text style={[styles.recentKind, { color: KIND_COLOR[scan.kind] }]}>{KIND_LABEL[scan.kind]}</Text>
+                  <Text style={styles.recentCode} selectable>{scan.code}</Text>
+                  <Text style={styles.recentTime}>{formatClock(scan.at)}</Text>
+                </View>
+              ))}
+            </Card>
+          ) : null}
+            </View>
+            <View style={styles.paneMain}>
+          <Card>
+            <SectionTitle title="أصناف الفاتورة" hint="غير المكتملة أولاً" />
+            <View style={styles.tableHead}>
+              <Text style={[styles.th, { flex: 1.2 }]}>الحالة</Text>
+              <Text style={[styles.th, { flex: 0.7 }]}>الممسوح</Text>
+              <Text style={[styles.th, { flex: 0.7 }]}>المطلوب</Text>
+              <Text style={[styles.th, { flex: 0.8 }]}>الوحدة</Text>
+              <Text style={[styles.th, { flex: 1.4 }]}>كود الصنف</Text>
+            </View>
+            {view?.items.map((item) => {
+              const badge = ITEM_BADGE[itemState(item)];
+              return (
+                <View key={item.item_key} style={styles.tr}>
+                  <View style={{ flex: 1.2 }}><StatusBadge state={badge.state} label={badge.label} /></View>
+                  <Text style={[styles.td, { flex: 0.7, fontWeight: "900" }]}>{item.scanned}</Text>
+                  <Text style={[styles.td, { flex: 0.7 }]}>{item.qty}</Text>
+                  <Text style={[styles.td, { flex: 0.8 }]} numberOfLines={1}>{item.unit ?? "—"}</Text>
+                  <Text style={[styles.td, { flex: 1.4, fontWeight: "800" }]} selectable>{item.item_code}</Text>
+                </View>
+              );
+            })}
+          </Card>
+
+            </View>
+          </View>
+        ) : (
+          <>
           <Card>
             <View style={styles.invoiceHead}>
               <StatusBadge state={invoice.status === "closed" ? "good" : invoice.status === "posted" ? "warning" : "neutral"} label={STATUS_LABELS[invoice.status]} />
@@ -292,13 +383,17 @@ export default function ScanScreen() {
               ))}
             </Card>
           ) : null}
-        </>
+          </>
+        )
       )}
     </Screen>
   );
 }
 
 const styles = StyleSheet.create({
+  panes: { flexDirection: "row", gap: 16, alignItems: "flex-start" },
+  paneSide: { flex: 2, gap: 16, minWidth: 0 },
+  paneMain: { flex: 3, gap: 16, minWidth: 0 },
   printBar: { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 4 },
   printText: { flex: 1, fontSize: 13, fontWeight: "800", textAlign: "right" },
   printRow: { color: palette.inkSoft, fontSize: 12, textAlign: "right" },

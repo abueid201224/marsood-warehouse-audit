@@ -51,14 +51,15 @@ export default function DashboardScreen() {
             <Metric label="مرحّلة بنواقص" value={String(stats.posted)} icon="arrow-right-bold-box-outline" accent={palette.amber} />
           </View>
 
-          <Card>
+          <View style={styles.grid}>
+          <Card style={styles.cell}>
             <SectionTitle title="تقدم المراجعة" hint={`${stats.closed} من ${stats.total} فاتورة منتهية`} action={<Text style={styles.percent}>{percent}%</Text>} />
             <ProgressBar percent={percent} />
             <ProgressChart closedAt={stats.timeline} total={stats.total} />
           </Card>
 
           {kpis ? (
-            <Card>
+            <Card style={styles.cell}>
               <SectionTitle title="مؤشرات الأداء" hint="تُحسب من زمن العمل الفعلي (الفجوات الأطول من دقيقتين لا تُحتسب)" />
               <View style={styles.metrics}>
                 <Metric label="الإنتاجية" value={formatRate(kpis.unitsPerHour, "وحدة/س")} icon="speedometer" accent={palette.tealDeep} />
@@ -79,6 +80,7 @@ export default function DashboardScreen() {
               ) : null}
             </Card>
           ) : null}
+          </View>
 
           <Card>
             <SectionTitle title="أخطاء المسح" hint="تُجمع كلها في التقرير القابل للطباعة" />
@@ -105,6 +107,8 @@ export default function DashboardScreen() {
 }
 
 const styles = StyleSheet.create({
+  grid: { flexDirection: "row", flexWrap: "wrap", gap: 16, alignItems: "flex-start" },
+  cell: { flexGrow: 1, flexShrink: 1, flexBasis: 420, minWidth: 0 },
   metrics: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
   note: { color: palette.amber, fontSize: 13, fontWeight: "700", textAlign: "right" },
   paretoTitle: { color: palette.ink, fontSize: 13, fontWeight: "800", textAlign: "right" },

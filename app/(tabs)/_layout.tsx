@@ -1,23 +1,29 @@
 import { Tabs } from "expo-router";
-import { Platform } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useLayout } from "@/lib/layout";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { palette } from "@/lib/palette";
 
 export default function TabLayout() {
+  const insets = useSafeAreaInsets();
+  const { isWide } = useLayout();
+  // الارتفاع يُحسب من حافة النظام السفلية (شريط الإيماءات/الأزرار) فلا تتداخل الأزرار مع التبويبات
+  const bottom = Math.max(insets.bottom, 8);
   return (
     <Tabs
       screenOptions={{
         headerShown: false,
         tabBarActiveTintColor: palette.tealDeep,
         tabBarInactiveTintColor: palette.subtle,
-        tabBarLabelStyle: { fontSize: 11, fontWeight: "700", marginTop: 1 },
+        tabBarLabelPosition: isWide ? "beside-icon" : "below-icon",
+        tabBarLabelStyle: { fontSize: isWide ? 14 : 11, fontWeight: "700", marginTop: 1 },
         tabBarStyle: {
           backgroundColor: palette.surface,
           borderTopColor: palette.line,
           borderTopWidth: 1,
-          height: Platform.OS === "web" ? 66 : 70,
+          height: (isWide ? 60 : 56) + bottom,
           paddingTop: 7,
-          paddingBottom: Platform.OS === "web" ? 9 : 10,
+          paddingBottom: bottom,
         },
       }}
     >

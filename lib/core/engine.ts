@@ -218,6 +218,8 @@ CREATE TABLE IF NOT EXISTS scans (
   operator TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_scans_order ON scans(order_key, item_key, kind);
+CREATE INDEX IF NOT EXISTS idx_scans_at ON scans(at);
+CREATE INDEX IF NOT EXISTS idx_scans_kind ON scans(kind, code);
 CREATE TABLE IF NOT EXISTS app_state (key TEXT PRIMARY KEY NOT NULL, value TEXT);
 CREATE TABLE IF NOT EXISTS print_files (
   ref_key TEXT NOT NULL,

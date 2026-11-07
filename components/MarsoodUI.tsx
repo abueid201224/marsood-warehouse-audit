@@ -1,17 +1,21 @@
 import type { PropsWithChildren, ReactNode } from "react";
-import { Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View, type ViewStyle } from "react-native";
+import { Pressable, ScrollView, StyleSheet, Text, View, type ViewStyle } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { useLayout } from "@/lib/layout";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { palette } from "@/lib/palette";
 
 export function Screen({ children, scroll = true }: PropsWithChildren<{ scroll?: boolean }>) {
+  const { gutter, maxWidth } = useLayout();
+  const page = { paddingHorizontal: gutter, maxWidth };
   return (
-    <SafeAreaView style={styles.safe}>
+    <SafeAreaView style={styles.safe} edges={["top", "left", "right"]}>
       {scroll ? (
-        <ScrollView contentContainerStyle={styles.page} keyboardShouldPersistTaps="handled">
+        <ScrollView contentContainerStyle={[styles.page, page]} keyboardShouldPersistTaps="handled">
           {children}
         </ScrollView>
       ) : (
-        <View style={[styles.page, { flex: 1 }]}>{children}</View>
+        <View style={[styles.page, page, { flex: 1 }]}>{children}</View>
       )}
     </SafeAreaView>
   );
@@ -174,10 +178,10 @@ export function EmptyState({ icon, title, body, action }: { icon: keyof typeof M
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: palette.background },
-  page: { paddingHorizontal: 22, paddingTop: 18, paddingBottom: 32, gap: 18, width: "100%", maxWidth: 1120, alignSelf: "center" },
+  page: { paddingTop: 16, paddingBottom: 32, gap: 16, width: "100%", alignSelf: "center" },
   header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 14, paddingBottom: 2 },
   headerTitle: { flex: 1, flexDirection: "row", alignItems: "center", gap: 12 },
-  headerHeading: { color: palette.ink, fontSize: 25, fontWeight: "800", textAlign: "right" },
+  headerHeading: { color: palette.ink, fontSize: 24, fontWeight: "800", textAlign: "right" },
   headerSub: { color: palette.muted, fontSize: 13, lineHeight: 20, textAlign: "right", marginTop: 3 },
   sectionTitle: { flexDirection: "row", alignItems: "center", gap: 12, marginTop: 3 },
   sectionHeading: { color: palette.ink, fontSize: 17, fontWeight: "800", textAlign: "right" },
