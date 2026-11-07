@@ -249,12 +249,22 @@ def pick_pdf_folder():
         use = find_ci(root, "use this folder")
         title = labels(root)[:6]
         if use is not None and any("marsood-pdfs" in t for t in title):
-            tap(use)
-            time.sleep(2)
-            allow = wait_for("ALLOW", 10) or find_ci(dump(), "allow")
-            if allow is not None:
-                tap(allow)
-            return True
+            for tries in range(4):
+                print("--- زر «Use this folder»:", use.attrib.get("bounds"), "clickable=", use.attrib.get("clickable"), flush=True)
+                x1, y1, x2, y2 = map(int, re.findall(r"\d+", use.attrib["bounds"]))
+                adb("shell", "input", "tap", str((x1 + x2) // 2), str(min(y2 - 4, y1 + max(8, (y2 - y1) // 3))))
+                time.sleep(2.5)
+                after = dump()
+                print("    بعد الضغط:", labels(after)[:12], flush=True)
+                allow = find_ci(after, "allow")
+                if allow is not None and find_ci(after, "Allow access") is not None or (allow is not None and allow.attrib.get("clickable") == "true"):
+                    tap(allow)
+                    time.sleep(2)
+                    return True
+                use = find_ci(after, "use this folder")
+                if use is None:
+                    return True
+            return False
         n = find(root, "marsood-pdfs")
         if n is not None:
             tap(n)
