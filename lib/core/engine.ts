@@ -750,7 +750,8 @@ export class AuditEngine {
   replacePrintIndex(entries: PrintFileEntry[]): Promise<{ invoices: number; labels: number }> {
     return this.enqueue(() =>
       this.tx(async () => {
-        await this.db.run("DELETE FROM print_files");
+        // الفهرسة من مجلد SAF تستبدل روابط content:// فقط وتُبقي الملفات المنسوخة من Drive/OneDrive (file://)
+        await this.db.run("DELETE FROM print_files WHERE uri LIKE 'content:%'");
         for (let start = 0; start < entries.length; start += 100) {
           const chunk = entries.slice(start, start + 100);
           const params: SqlValue[] = [];
@@ -761,6 +762,28 @@ export class AuditEngine {
         return { invoices: rows.find((r) => r.kind === "invoice")?.n ?? 0, labels: rows.find((r) => r.kind === "label")?.n ?? 0 };
       }),
     );
+  }
+
+  /** يضيف/يحدّث ملفات PDF (منسوخة من Drive/OneDrive أو الجهاز) دون مسح الفهرس الحالي. */
+  mergePrintIndex(entries: PrintFileEntry[]): Promise<{ invoices: number; labels: number }> {
+    return this.enqueue(() =>
+      this.tx(async () => {
+        for (let start = 0; start < entries.length; start += 100) {
+          const chunk = entries.slice(start, start + 100);
+          const params: SqlValue[] = [];
+          for (const e of chunk) params.push(e.refKey, e.kind, e.name, e.uri);
+          await this.db.run(`INSERT OR REPLACE INTO print_files (ref_key, kind, name, uri) VALUES ${chunk.map(() => "(?,?,?,?)").join(",")}`, params);
+        }
+        const rows = await this.db.all<{ kind: PrintKind; n: number }>("SELECT kind, COUNT(*) AS n FROM print_files GROUP BY kind");
+        return { invoices: rows.find((r) => r.kind === "invoice")?.n ?? 0, labels: rows.find((r) => r.kind === "label")?.n ?? 0 };
+      }),
+    );
+  }
+
+  clearPrintIndex(): Promise<void> {
+    return this.enqueue(async () => {
+      await this.db.run("DELETE FROM print_files");
+    });
   }
 
   printIndexCounts(): Promise<{ invoices: number; labels: number }> {

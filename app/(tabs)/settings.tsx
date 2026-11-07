@@ -5,7 +5,9 @@ import { Button, Card, Header, Notice, Screen, SectionTitle } from "@/components
 import type { PrintConfig } from "@/lib/core/engine";
 import { useEngine } from "@/lib/core/hooks";
 import { palette } from "@/lib/palette";
-import { chooseFolderAndIndex, inspectPrinter, kickPrintQueue, reindexNow, sendTestPage } from "@/lib/print/runtime";
+import { SourceSheet } from "@/components/SourceSheet";
+import { ensureStorageAccess } from "@/lib/access";
+import { addPdfFiles, clearPdfIndex, chooseFolderAndIndex, inspectPrinter, kickPrintQueue, reindexNow, sendTestPage } from "@/lib/print/runtime";
 import { folderLabel } from "@/lib/print/names";
 import { usePrintSummary } from "@/lib/print/hooks";
 
@@ -21,6 +23,7 @@ export default function SettingsScreen() {
   const [labelPrinter, setLabelPrinter] = useState("");
   const [note, setNote] = useState<{ tone: Tone; title: string; body: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [sheet, setSheet] = useState<null | "files">(null);
 
   const load = useCallback(() => {
     if (!engine) return;
@@ -71,6 +74,26 @@ export default function SettingsScreen() {
       const result = await chooseFolderAndIndex(engine);
       if (!result) return setNote({ tone: "info", title: "لم يُختر مجلد", body: "لم يتغير شيء." });
       setNote({ tone: result.invoices + result.labels > 0 ? "success" : "warning", title: "تمت تهيئة قاعدة بيانات الفواتير", body: `عُثر على ${result.invoices} فاتورة (_b_Invoice.pdf) و${result.labels} بوليصة (_c_Label.pdf).${result.invoices + result.labels === 0 ? " تأكد أن الملفات داخل المجلد المختار مباشرة وبالصيغة المطلوبة." : ""}` });
+      load();
+    });
+
+  const addFiles = () =>
+    run(async () => {
+      if (!engine) return;
+      setSheet(null);
+      const access = await ensureStorageAccess();
+      const result = await addPdfFiles(engine);
+      if (!result) return setNote({ tone: "info", title: "لم تُختر ملفات", body: "لم يتغير شيء." });
+      const problems = [result.ignored ? `${result.ignored} ملف لا يطابق الصيغة (_b_Invoice.pdf / _c_Label.pdf) فتُجوهل.` : "", result.failed.length ? `تعذر نسخ ${result.failed.length} ملف: ${result.failed[0]}` : "", access === "denied" ? "لم يُمنح إذن التخزين العام، لكن الملفات المختارة قُرئت عبر منتقي النظام." : ""].filter(Boolean).join(" ");
+      setNote({ tone: result.added > 0 && !result.failed.length ? "success" : "warning", title: `أُضيف ${result.added} ملف إلى قاعدة الفواتير`, body: `الإجمالي المفهرس: ${result.invoices} فاتورة و${result.labels} بوليصة. ${problems}` });
+      load();
+    });
+
+  const clearIndex = () =>
+    run(async () => {
+      if (!engine) return;
+      await clearPdfIndex(engine);
+      setNote({ tone: "info", title: "مُسح الفهرس", body: "حُذفت الملفات المنسوخة وفهرس PDF. المجلد المختار لم يُمس." });
       load();
     });
 
@@ -137,6 +160,8 @@ export default function SettingsScreen() {
         {counts ? <Text style={styles.line}>المفهرس: {counts.invoices} فاتورة • {counts.labels} بوليصة</Text> : null}
         <View style={styles.actions}>
           <View style={styles.action}><Button title="اختيار المجلد وتهيئة الفهرس" icon="folder-search-outline" onPress={pickFolder} disabled={busy} /></View>
+          <View style={styles.action}><Button title="إضافة ملفات PDF (Drive / OneDrive / الجهاز)" icon="cloud-download-outline" variant="outline" onPress={() => setSheet("files")} disabled={busy} /></View>
+          <View style={styles.action}><Button title="مسح الفهرس" icon="delete-outline" variant="outline" onPress={clearIndex} disabled={busy || !counts || counts.invoices + counts.labels === 0} /></View>
           <View style={styles.action}><Button title="إعادة الفهرسة" icon="refresh" variant="outline" onPress={reindex} disabled={busy || !config?.folder} /></View>
         </View>
         <Text style={styles.hint}>يُبحث بنفس الرقم الممسوح (رقم الطلب أو الفاتورة) مع تجاهل الأصفار البادئة. المجلد يُقرأ دون المجلدات الفرعية.</Text>
@@ -164,6 +189,7 @@ export default function SettingsScreen() {
         <TextInput value={operator} onChangeText={setOperator} placeholder="اسم المشغّل" placeholderTextColor={palette.subtle} style={styles.input} textAlign="right" />
         <Button title="حفظ الإعدادات" icon="content-save-outline" onPress={saveBasics} disabled={busy || !engine} />
       </Card>
+      <SourceSheet visible={sheet === "files"} kind="pdf" onConfirm={addFiles} onCancel={() => setSheet(null)} />
     </Screen>
   );
 }

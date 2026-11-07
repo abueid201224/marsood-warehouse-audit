@@ -233,6 +233,15 @@ describe("طابور الطباعة والمؤشرات", () => {
     expect(report.printLog.length).toBeGreaterThan(0);
   });
 
+  it("إعادة فهرسة المجلد لا تمسح الملفات المنسوخة من Drive، والدمج يضيف", async () => {
+    await engine.mergePrintIndex(buildIndex([{ name: "777_b_Invoice.pdf", uri: "file:///app/pdfs/777_b_Invoice.pdf" }]));
+    await engine.replacePrintIndex(buildIndex(files));
+    expect((await engine.findPrintFile(["777"], "invoice"))?.uri).toBe("file:///app/pdfs/777_b_Invoice.pdf");
+    expect((await engine.printIndexCounts()).invoices).toBe(3);
+    await engine.clearPrintIndex();
+    expect((await engine.printIndexCounts()).invoices).toBe(0);
+  });
+
   it("resetAll يحفظ الإعدادات وفهرس PDF ويحذف مهام الطباعة", async () => {
     await engine.replacePrintIndex(buildIndex(files));
     await finishOrder(ORDER_A, "1001");

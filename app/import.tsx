@@ -13,6 +13,8 @@ import type { ImportSummary } from "@/lib/core/engine";
 import { useEngine } from "@/lib/core/hooks";
 import { FIELD_LABELS, FIELD_ORDER, inspectWorkbook, mapRows, type ColumnMap, type FieldKey, type SheetPreview } from "@/lib/core/importer";
 import { palette } from "@/lib/palette";
+import { SourceSheet } from "@/components/SourceSheet";
+import { ensureStorageAccess } from "@/lib/access";
 
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
 const REQUIRED: FieldKey[] = ["order", "item", "qty"];
@@ -93,6 +95,7 @@ export default function ImportScreen() {
   const [preview, setPreview] = useState<SheetPreview | null>(null);
   const [map, setMap] = useState<ColumnMap | null>(null);
   const [summary, setSummary] = useState<ImportSummary | null>(null);
+  const [sheet, setSheet] = useState(false);
 
   const parsed = useMemo(() => (preview && map ? mapRows(preview, map) : null), [preview, map]);
   const stats = useMemo(() => {
@@ -112,14 +115,21 @@ export default function ImportScreen() {
   }
 
   async function chooseFile() {
+    setSheet(false);
     setError(""); setSummary(null);
     try {
+      const access = await ensureStorageAccess();
+      if (access === "denied") setError("لم يُمنح إذن التخزين العام؛ سيُفتح منتقي النظام ويمكنك اختيار الملف منه مباشرة.");
       const picked = await DocumentPicker.getDocumentAsync({ type: "*/*", copyToCacheDirectory: true, multiple: false });
       if (picked.canceled || !picked.assets?.[0]) return;
       const asset = picked.assets[0];
       const ext = asset.name.split(".").pop()?.toLowerCase() ?? "";
-      if (!["xlsx", "xls", "csv", "txt"].includes(ext)) {
-        setError("صيغة الملف غير مدعومة. اختر ملف Excel (XLSX أو XLS) أو CSV.");
+      const mime = (asset.mimeType ?? "").toLowerCase();
+      const known = ["xlsx", "xls", "csv", "txt"].includes(ext) || /spreadsheet|excel|csv|text\/plain/.test(mime);
+      // ملفات Drive/OneDrive قد تصل بلا امتداد أو بنوع عام: نحكم بمحتوى الملف لا باسمه
+      const rejected = ["pdf", "jpg", "jpeg", "png", "doc", "docx", "zip"].includes(ext) && !known;
+      if (rejected) {
+        setError("صيغة الملف غير مدعومة. اختر ملف Excel (XLSX أو XLS) أو CSV. ملفات Google Sheets الأصلية: احفظها من Drive بصيغة Excel أولاً.");
         return;
       }
       if (asset.size && asset.size > MAX_FILE_BYTES) {
@@ -130,12 +140,18 @@ export default function ImportScreen() {
       const data = await readBytes(asset.uri);
       if (data.byteLength > MAX_FILE_BYTES) throw new Error("حجم الملف أكبر من 25 ميغابايت.");
       let next: SheetPreview;
+      let displayName = asset.name;
+      const looksBinary = (data[0] === 0x50 && data[1] === 0x4b) || (data[0] === 0xd0 && data[1] === 0xcf);
+      if (!known && !looksBinary && data.byteLength > 0 && asset.name.indexOf(".") === -1) {
+        // بلا امتداد ولا ترويسة Excel: نعامله كـ CSV نصي
+        displayName = `${asset.name}.csv`;
+      }
       try {
-        next = inspectWorkbook(XLSX, data, asset.name);
+        next = inspectWorkbook(XLSX, data, displayName);
       } catch (cause) {
         throw new Error(`تعذر تحليل الملف كجدول Excel: ${cause instanceof Error ? cause.message : String(cause)}`);
       }
-      setFileName(asset.name);
+      setFileName(displayName);
       setBytes(data);
       setPreview(next);
       setMap(next.columnMap);
@@ -194,7 +210,7 @@ export default function ImportScreen() {
           <View style={styles.pickIcon}><MaterialCommunityIcons name="file-excel-outline" size={32} color={palette.tealDeep} /></View>
           <Text style={styles.pickTitle}>اختر ملف الفواتير</Text>
           <Text style={styles.pickBody}>يدعم XLSX وXLS وCSV حتى 25 ميغابايت. تُستخلص الفواتير من الجدول تلقائياً بحسب رقم الطلب، ولا يغادر الملف هذا الجهاز.</Text>
-          <Button title={busy ? "جارٍ قراءة الملف…" : "تحديد ملف من الجهاز"} icon="folder-open-outline" onPress={chooseFile} disabled={busy} />
+          <Button title={busy ? "جارٍ قراءة الملف…" : "تحديد ملف (الجهاز / Drive / OneDrive)"} icon="folder-open-outline" onPress={() => setSheet(true)} disabled={busy} />
         </Card>
       ) : null}
 
@@ -263,6 +279,7 @@ export default function ImportScreen() {
           ) : null}
         </>
       ) : null}
+      <SourceSheet visible={sheet} kind="excel" onConfirm={chooseFile} onCancel={() => setSheet(false)} />
     </Screen>
   );
 }

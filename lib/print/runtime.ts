@@ -1,5 +1,5 @@
 import type { AuditEngine } from "../core/engine";
-import { listFolderFiles, pickPdfFolder, readFileBytes } from "./folder";
+import { deleteCopiedPdfs, importPdfFiles, listFolderFiles, pickPdfFolder, readFileBytes } from "./folder";
 import { getPrinterInfo, printPdf } from "./ipp";
 import { buildTestPdf } from "./pdf";
 import { processPrintQueue, reindexFolder, type PrintDeps } from "./queue";
@@ -37,4 +37,16 @@ export function inspectPrinter(url: string) {
 export async function sendTestPage(url: string, label: string) {
   const stamp = new Date().toISOString().replace("T", " ").slice(0, 16);
   await printPdf(xhrTransport, url, buildTestPdf(["Marsood - printer test page", label, stamp]), "Marsood test page");
+}
+
+export async function addPdfFiles(engine: AuditEngine): Promise<{ added: number; ignored: number; failed: string[]; invoices: number; labels: number } | null> {
+  const result = await importPdfFiles();
+  if (!result) return null;
+  const counts = await engine.mergePrintIndex(result.entries);
+  return { added: result.entries.length, ignored: result.ignored, failed: result.failed, ...counts };
+}
+
+export async function clearPdfIndex(engine: AuditEngine): Promise<void> {
+  await engine.clearPrintIndex();
+  await deleteCopiedPdfs();
 }

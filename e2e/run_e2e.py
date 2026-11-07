@@ -302,7 +302,9 @@ def main():
     # ---------- الاستيراد ----------
     check("زر الاستيراد ظاهر", tap_text("استيراد ملف Excel", 20))
     check("شاشة الاستيراد", wait_for("اختر ملف الفواتير", 20) is not None)
-    tap_text("تحديد ملف من الجهاز", 20)
+    tap_text("تحديد ملف (الجهاز / Drive / OneDrive)", 20)
+    check("نافذة المصادر تعرض Google Drive وOneDrive", wait_for("OneDrive", 15) is not None and find(dump(), "Google Drive") is not None)
+    tap_text("متابعة واختيار الملف", 15)
     time.sleep(3)
     picked = False
     for attempt in range(6):
@@ -336,6 +338,9 @@ def main():
     start_printer()
     tap_tab("الإعدادات", "الطباعة التلقائية")
     check("شاشة الإعدادات", wait_for("قاعدة بيانات الفواتير", 20) is not None)
+    tap_text("إضافة ملفات PDF (Drive / OneDrive / الجهاز)", 30)
+    check("نافذة مصادر PDF تذكر التحديد المتعدد", wait_for("تحديد عدة ملفات PDF", 15) is not None)
+    tap_text("إلغاء", 15)
     tap_text("اختيار المجلد وتهيئة الفهرس", 20)
     check("اختيار مجلد PDF عبر منتقي أندرويد", pick_pdf_folder())
     check("فهرسة ملفات الفاتورة والبوليصة", wait_for("تمت تهيئة قاعدة بيانات الفواتير", 30) is not None)

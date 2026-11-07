@@ -40,7 +40,7 @@ const env = {
 const config: ExpoConfig = {
   name: env.appName,
   slug: env.appSlug,
-  version: "1.2.0",
+  version: "1.3.0",
   orientation: "default",
   icon: "./assets/images/icon.png",
   scheme: env.scheme,
@@ -61,15 +61,14 @@ const config: ExpoConfig = {
     },
     predictiveBackGestureEnabled: false,
     package: env.androidPackage,
-    versionCode: 3,
-    permissions: ["android.permission.INTERNET"], // للطباعة الصامتة إلى الطابعات في الشبكة المحلية فقط
+    versionCode: 4,
+    permissions: ["android.permission.INTERNET", "android.permission.READ_EXTERNAL_STORAGE"], // للطباعة الصامتة إلى الطابعات في الشبكة المحلية فقط
     blockedPermissions: [
       "android.permission.POST_NOTIFICATIONS",
       "android.permission.RECORD_AUDIO",
       "android.permission.CAMERA",
       "android.permission.ACCESS_FINE_LOCATION",
       "android.permission.ACCESS_COARSE_LOCATION",
-      "android.permission.READ_EXTERNAL_STORAGE",
       "android.permission.WRITE_EXTERNAL_STORAGE",
     ],
     allowBackup: false,
