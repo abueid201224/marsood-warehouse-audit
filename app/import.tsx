@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "expo-router";
 import * as DocumentPicker from "expo-document-picker";
 import * as LegacyFileSystem from "expo-file-system/legacy";
@@ -15,6 +15,8 @@ import { FIELD_LABELS, FIELD_ORDER, inspectWorkbook, mapRows, type ColumnMap, ty
 import { palette } from "@/lib/palette";
 import { SourceSheet } from "@/components/SourceSheet";
 import { ensureStorageAccess } from "@/lib/access";
+import { SYNC_FOLDER_KEY, SYNC_PROCESSED_KEY, listSyncFiles, pickSyncFolder } from "@/lib/sync/folder";
+import { addProcessed, parseProcessed, pickNewestUnprocessed, syncSignature, type SyncFile } from "@/lib/sync/select";
 
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
 const REQUIRED: FieldKey[] = ["order", "item", "qty"];
@@ -46,6 +48,25 @@ async function readBytes(uri: string): Promise<Uint8Array> {
     failures.push(cause instanceof Error ? cause.message : String(cause));
   }
   throw new Error(`تعذرت قراءة الملف من الجهاز. (${failures.join(" | ")})`);
+}
+
+/** زر مستقل بألوان صريحة وحدّ ظاهر دائماً (لا يعتمد على ألوان الأزرار المشتركة). */
+function ActionButton({ title, icon, onPress, disabled, solid = true, testID }: { title: string; icon: keyof typeof MaterialCommunityIcons.glyphMap; onPress: () => void; disabled?: boolean; solid?: boolean; testID?: string }) {
+  const bg = solid ? "#0B3B4A" : "#FFFFFF";
+  const fg = solid ? "#FFFFFF" : "#0B3B4A";
+  return (
+    <Pressable
+      testID={testID}
+      accessibilityRole="button"
+      accessibilityLabel={title}
+      disabled={disabled}
+      onPress={onPress}
+      style={{ alignSelf: "stretch", minHeight: 52, borderRadius: 14, borderWidth: 2, borderColor: "#0B3B4A", backgroundColor: bg, opacity: disabled ? 0.5 : 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10, paddingHorizontal: 16 }}
+    >
+      <MaterialCommunityIcons name={icon} size={22} color={fg} />
+      <Text style={{ color: fg, fontSize: 16, fontWeight: "800", textAlign: "center" }}>{title}</Text>
+    </Pressable>
+  );
 }
 
 function ColumnSelect({ label, required, value, headers, onChange }: { label: string; required: boolean; value: number | null; headers: string[]; onChange: (value: number | null) => void }) {
@@ -97,6 +118,22 @@ export default function ImportScreen() {
   const [summary, setSummary] = useState<ImportSummary | null>(null);
   const [sheet, setSheet] = useState(false);
   const [status, setStatus] = useState("");
+  const [folder, setFolder] = useState<string | null>(null);
+  const [syncFiles, setSyncFiles] = useState<SyncFile[]>([]);
+  const [processed, setProcessed] = useState<string[]>([]);
+  const [currentSig, setCurrentSig] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!engine) return;
+    let alive = true;
+    (async () => {
+      const [savedFolder, savedProcessed] = await Promise.all([engine.getSetting(SYNC_FOLDER_KEY), engine.getSetting(SYNC_PROCESSED_KEY)]);
+      if (!alive) return;
+      setFolder(savedFolder || null);
+      setProcessed(parseProcessed(savedProcessed));
+    })().catch(() => undefined);
+    return () => { alive = false; };
+  }, [engine]);
 
   const parsed = useMemo(() => (preview && map ? mapRows(preview, map) : null), [preview, map]);
   const stats = useMemo(() => {
@@ -142,25 +179,93 @@ export default function ImportScreen() {
         return;
       }
       const data = await readBytes(asset.uri);
-      if (data.byteLength > MAX_FILE_BYTES) throw new Error("حجم الملف أكبر من 25 ميغابايت.");
-      let next: SheetPreview;
-      let displayName = asset.name;
-      const looksBinary = (data[0] === 0x50 && data[1] === 0x4b) || (data[0] === 0xd0 && data[1] === 0xcf);
-      if (!known && !looksBinary && data.byteLength > 0 && asset.name.indexOf(".") === -1) {
-        // بلا امتداد ولا ترويسة Excel: نعامله كـ CSV نصي
-        displayName = `${asset.name}.csv`;
-      }
-      try {
-        next = inspectWorkbook(XLSX, data, displayName);
-      } catch (cause) {
-        throw new Error(`تعذر تحليل الملف كجدول Excel: ${cause instanceof Error ? cause.message : String(cause)}`);
-      }
-      setFileName(displayName);
-      setBytes(data);
-      setPreview(next);
-      setMap(next.columnMap);
+      loadWorkbook(data, asset.name, known);
+      setCurrentSig(null);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "تعذر قراءة الملف المحدد.");
+    } finally {
+      setBusy(false);
+      setStatus("");
+    }
+  }
+
+  function loadWorkbook(data: Uint8Array, name: string, known = true) {
+    if (data.byteLength > MAX_FILE_BYTES) throw new Error("حجم الملف أكبر من 25 ميغابايت.");
+    let displayName = name;
+    const looksBinary = (data[0] === 0x50 && data[1] === 0x4b) || (data[0] === 0xd0 && data[1] === 0xcf);
+    if (!known && !looksBinary && data.byteLength > 0 && name.indexOf(".") === -1) displayName = `${name}.csv`;
+    let next: SheetPreview;
+    try {
+      next = inspectWorkbook(XLSX, data, displayName);
+    } catch (cause) {
+      throw new Error(`تعذر تحليل الملف كجدول Excel: ${cause instanceof Error ? cause.message : String(cause)}`);
+    }
+    setFileName(displayName);
+    setBytes(data);
+    setPreview(next);
+    setMap(next.columnMap);
+  }
+
+  async function chooseSyncFolder() {
+    setError(""); setSummary(null);
+    setBusy(true);
+    setStatus("جارٍ فتح منتقي المجلدات…");
+    try {
+      const uri = await pickSyncFolder();
+      if (!uri) return;
+      await engine?.setSetting(SYNC_FOLDER_KEY, uri);
+      setFolder(uri);
+      await syncNow(uri);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "تعذر فتح المجلد.");
+    } finally {
+      setBusy(false);
+      setStatus("");
+    }
+  }
+
+  async function openSyncFile(file: SyncFile) {
+    setError(""); setSummary(null);
+    setBusy(true);
+    setStatus(`جارٍ قراءة ${file.name}…`);
+    try {
+      const data = await readBytes(file.uri);
+      loadWorkbook(data, file.name);
+      setCurrentSig(syncSignature(file));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "تعذر قراءة الملف.");
+    } finally {
+      setBusy(false);
+      setStatus("");
+    }
+  }
+
+  /** مزامنة: يسرد المجلد ويفتح أحدث ملف لم يُستورد بعد. */
+  async function syncNow(target: string | null = folder) {
+    if (!target) { await chooseSyncFolder(); return; }
+    setError(""); setSummary(null);
+    setBusy(true);
+    setStatus("جارٍ فحص مجلد المزامنة…");
+    try {
+      const files = await listSyncFiles(target);
+      setSyncFiles(files);
+      if (files.length === 0) {
+        setError("لا توجد ملفات Excel أو CSV في المجلد المختار. تأكد أن المزامنة اليومية وضعت الملف فيه، أو اختر مجلداً آخر.");
+        return;
+      }
+      const fresh = pickNewestUnprocessed(files, new Set(processed));
+      if (!fresh) {
+        setStatus("");
+        setError("لا توجد ملفات جديدة: كل ملفات المجلد مستوردة سابقاً. اضغط على ملف من القائمة لإعادة فتحه عند الحاجة.");
+        return;
+      }
+      setStatus(`جارٍ قراءة ${fresh.name}…`);
+      const data = await readBytes(fresh.uri);
+      loadWorkbook(data, fresh.name);
+      setCurrentSig(syncSignature(fresh));
+    } catch (cause) {
+      const text = cause instanceof Error ? cause.message : String(cause);
+      setError(`تعذرت المزامنة: ${text}. إن تغير المجلد أو انتهى إذنه فاضغط «تغيير المجلد».`);
     } finally {
       setBusy(false);
       setStatus("");
@@ -184,6 +289,11 @@ export default function ImportScreen() {
     setBusy(true); setError("");
     try {
       setSummary(await engine.importRows(parsed.rows, fileName));
+      if (currentSig) {
+        const next = addProcessed(processed, currentSig);
+        setProcessed(next);
+        await engine.setSetting(SYNC_PROCESSED_KEY, JSON.stringify(next)).catch(() => undefined);
+      }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "تعذر حفظ البيانات في قاعدة البيانات المحلية.");
     } finally {
@@ -212,12 +322,38 @@ export default function ImportScreen() {
       ) : null}
 
       {!fileName && !summary ? (
-        <Card style={styles.pickCard}>
-          <View style={styles.pickIcon}><MaterialCommunityIcons name="file-excel-outline" size={32} color={palette.tealDeep} /></View>
-          <Text style={styles.pickTitle}>اختر ملف الفواتير</Text>
-          <Text style={styles.pickBody}>يدعم XLSX وXLS وCSV حتى 25 ميغابايت. تُستخلص الفواتير من الجدول تلقائياً بحسب رقم الطلب، ولا يغادر الملف هذا الجهاز.</Text>
-          <Button title={busy ? "جارٍ قراءة الملف…" : "تحديد ملف (الجهاز / Drive / OneDrive)"} icon="folder-open-outline" onPress={() => setSheet(true)} disabled={busy} />
-        </Card>
+        <>
+          <View style={styles.syncCard}>
+            <View style={styles.pickIcon}><MaterialCommunityIcons name="folder-sync-outline" size={32} color={palette.tealDeep} /></View>
+            <Text style={styles.pickTitle}>مزامنة المجلد اليومي</Text>
+            <Text style={styles.pickBody}>
+              {folder ? "المجلد محفوظ. اضغط «مزامنة الآن» ليُفتح أحدث ملف فواتير جديد في المجلد، ولا يُستورد الملف نفسه مرتين." : "اختر مرة واحدة المجلد الذي تضع فيه المزامنة اليومية ملف الفواتير (مثل مجلد OneDrive على الجهاز)."}
+            </Text>
+            {folder ? <ActionButton testID="sync-now" title={busy ? "جارٍ العمل…" : "مزامنة الآن"} icon="sync" onPress={() => void syncNow()} disabled={busy} /> : null}
+            <ActionButton testID="sync-folder" title={folder ? "تغيير المجلد" : "اختيار مجلد المزامنة"} icon="folder-open-outline" solid={!folder} onPress={() => void chooseSyncFolder()} disabled={busy} />
+          </View>
+
+          {syncFiles.length > 0 ? (
+            <View style={styles.syncCard}>
+              <Text style={styles.pickTitle}>ملفات المجلد (الأحدث أولاً)</Text>
+              {syncFiles.slice(0, 12).map((file) => {
+                const done = processed.includes(syncSignature(file));
+                return (
+                  <Pressable key={file.uri} onPress={() => void openSyncFile(file)} disabled={busy} style={styles.fileOption} accessibilityRole="button">
+                    <Text style={[styles.fileState, done && { color: palette.muted }]}>{done ? "مستورد" : "جديد"}</Text>
+                    <Text style={styles.fileOptionName} numberOfLines={1}>{file.name}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          ) : null}
+
+          <View style={styles.syncCard}>
+            <Text style={styles.pickTitle}>أو اختر ملفاً واحداً</Text>
+            <Text style={styles.pickBody}>XLSX وXLS وCSV حتى 25 ميغابايت، من الجهاز أو Google Drive أو OneDrive. لا يغادر الملف هذا الجهاز.</Text>
+            <ActionButton testID="pick-file" title={busy ? "جارٍ قراءة الملف…" : "تحديد ملف من الجهاز / Drive / OneDrive"} icon="file-excel-outline" solid={false} onPress={() => setSheet(true)} disabled={busy} />
+          </View>
+        </>
       ) : null}
 
       {preview && map && !summary ? (
@@ -293,6 +429,10 @@ export default function ImportScreen() {
 const styles = StyleSheet.create({
   backButton: { flexDirection: "row", alignItems: "center", gap: 4, padding: 8 },
   backText: { color: palette.ink, fontWeight: "800", fontSize: 13 },
+  syncCard: { alignItems: "center", gap: 14, padding: 18, borderRadius: 18, borderWidth: 1, borderColor: "#CBD5E1", backgroundColor: "#FFFFFF" },
+  fileOption: { alignSelf: "stretch", minHeight: 48, flexDirection: "row", alignItems: "center", gap: 10, borderBottomWidth: 1, borderBottomColor: "#E2E8F0", paddingHorizontal: 6 },
+  fileOptionName: { flex: 1, color: "#0F172A", fontSize: 14, fontWeight: "700", textAlign: "right" },
+  fileState: { color: "#047857", fontSize: 12, fontWeight: "800", width: 52 },
   pickCard: { minHeight: 270, alignItems: "center", justifyContent: "center", paddingHorizontal: 24 },
   pickIcon: { width: 68, height: 68, borderRadius: 23, backgroundColor: palette.tealPale, alignItems: "center", justifyContent: "center" },
   pickTitle: { color: palette.ink, fontSize: 19, fontWeight: "900" },

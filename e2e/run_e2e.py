@@ -318,8 +318,10 @@ def main():
 
     # ---------- الاستيراد ----------
     check("زر الاستيراد ظاهر", tap_text("استيراد ملف Excel", 20))
-    check("شاشة الاستيراد", wait_for("اختر ملف الفواتير", 20) is not None)
-    tap_text("تحديد ملف (الجهاز / Drive / OneDrive)", 20)
+    check("شاشة الاستيراد", wait_for("مزامنة المجلد اليومي", 20) is not None)
+    check("زر اختيار مجلد المزامنة ظاهر", wait_for("اختيار مجلد المزامنة", 10) is not None)
+    check("زر اختيار ملف واحد ظاهر", wait_for("تحديد ملف من الجهاز / Drive / OneDrive", 10) is not None)
+    tap_text("تحديد ملف من الجهاز / Drive / OneDrive", 20)
     check("نافذة المصادر تعرض Google Drive وOneDrive", wait_for("OneDrive", 15) is not None and find(dump(), "Google Drive") is not None)
     tap_text("متابعة واختيار الملف", 15)
     # أندرويد 12 فما دون: تظهر نافذة إذن التخزين؛ ثم يجب أن يفتح المنتقي دائماً
