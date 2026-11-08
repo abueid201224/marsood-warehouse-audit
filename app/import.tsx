@@ -122,6 +122,7 @@ export default function ImportScreen() {
   const [syncFiles, setSyncFiles] = useState<SyncFile[]>([]);
   const [processed, setProcessed] = useState<string[]>([]);
   const [currentSig, setCurrentSig] = useState<string | null>(null);
+  const [lastSync, setLastSync] = useState("");
 
   useEffect(() => {
     if (!engine) return;
@@ -131,6 +132,7 @@ export default function ImportScreen() {
       if (!alive) return;
       setFolder(savedFolder || null);
       setProcessed(parseProcessed(savedProcessed));
+      setLastSync((await engine.getSetting("sync:last")) ?? "");
     })().catch(() => undefined);
     return () => { alive = false; };
   }, [engine]);
@@ -293,6 +295,9 @@ export default function ImportScreen() {
         const next = addProcessed(processed, currentSig);
         setProcessed(next);
         await engine.setSetting(SYNC_PROCESSED_KEY, JSON.stringify(next)).catch(() => undefined);
+        const stamp = new Date().toLocaleString("ar-SA");
+        setLastSync(stamp);
+        await engine.setSetting("sync:last", stamp).catch(() => undefined);
       }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "تعذر حفظ البيانات في قاعدة البيانات المحلية.");
@@ -329,6 +334,7 @@ export default function ImportScreen() {
             <Text style={styles.pickBody}>
               {folder ? "المجلد محفوظ. اضغط «مزامنة الآن» ليُفتح أحدث ملف فواتير جديد في المجلد، ولا يُستورد الملف نفسه مرتين." : "اختر مرة واحدة المجلد الذي تضع فيه المزامنة اليومية ملف الفواتير (مثل مجلد OneDrive على الجهاز)."}
             </Text>
+            {lastSync ? <Text style={styles.pickBody}>آخر استيراد من المجلد: {lastSync}</Text> : null}
             {folder ? <ActionButton testID="sync-now" title={busy ? "جارٍ العمل…" : "مزامنة الآن"} icon="sync" onPress={() => void syncNow()} disabled={busy} /> : null}
             <ActionButton testID="sync-folder" title={folder ? "تغيير المجلد" : "اختيار مجلد المزامنة"} icon="folder-open-outline" solid={!folder} onPress={() => void chooseSyncFolder()} disabled={busy} />
           </View>
