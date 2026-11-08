@@ -23,7 +23,7 @@ async function playerFor(kind: AlertKind): Promise<AudioPlayer | null> {
 export async function playAlert(kind: AlertKind): Promise<void> {
   try {
     if (!modeReady) {
-      await setAudioModeAsync({ playsInSilentMode: true, interruptionMode: "duckOthers" }).catch(() => undefined);
+      await setAudioModeAsync({ playsInSilentMode: true } as unknown as Parameters<typeof setAudioModeAsync>[0]).catch(() => undefined);
       modeReady = true;
     }
     const player = await playerFor(kind);
