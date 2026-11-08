@@ -78,7 +78,12 @@ export default function InvoicesScreen() {
     async (row: InvoiceView) => {
       if (!engine) return;
       try {
-        await engine.openInvoice(row.order_key);
+        const result = await engine.openInvoice(row.order_key);
+        if (result.type === "blocked") {
+          setMessage(`أكمل الفاتورة ${result.orderNo} أولاً (ينقصها ${result.shortItems} صنف) أو رحّلها من شاشة المسح قبل فتح فاتورة أخرى.`);
+          return;
+        }
+        setMessage("");
         router.navigate("/scan");
       } catch (cause) {
         setMessage(cause instanceof Error ? cause.message : "تعذر فتح الفاتورة.");

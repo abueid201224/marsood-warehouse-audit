@@ -109,14 +109,35 @@ describe("قواعد المسح", () => {
     expect(r).toMatchObject({ type: "no-invoice" });
   });
 
-  it("مسح بوليصة أخرى يرحّل الحالية بنواقص ويفتح الجديدة", async () => {
+  it("بوليصة جديدة قبل اكتمال الفاتورة الحالية: تنبيه وعدم بدء مسح جديد", async () => {
     await engine.handleScan(ORDER_A);
     await engine.handleScan("1001");
     const r = await engine.handleScan(ORDER_B);
+    expect(r).toMatchObject({ type: "blocked", orderNo: ORDER_A });
+    expect(await engine.getCurrent()).toBe(ORDER_A);
+    expect((await engine.getInvoice(ORDER_A))!.invoice.status).toBe("open");
+    // الترحيل الصريح يتيح الانتقال
+    await engine.finishCurrent("post");
+    expect(await engine.handleScan(ORDER_B)).toMatchObject({ type: "order-opened", orderNo: ORDER_B });
+    expect((await engine.getInvoice(ORDER_A))!.invoice.status).toBe("posted");
+  });
+
+  it("رقم يبدأ بـ 200 أو 204 قبل اكتمال الفاتورة يُنبَّه حتى لو لم يكن في البيانات", async () => {
+    await engine.handleScan(ORDER_A);
+    await engine.handleScan("1001");
+    expect(await engine.handleScan("20012345678901")).toMatchObject({ type: "blocked" });
+    expect(await engine.handleScan("20412345678901")).toMatchObject({ type: "blocked" });
+    expect(await engine.handleScan("30012345678901")).toMatchObject({ type: "order-not-found" });
+  });
+
+  it("بوليصة جديدة بعد اكتمال الحالية: تُنهى تلقائياً ويبدأ مسح جديد", async () => {
+    await engine.handleScan(ORDER_A);
+    await engine.handleScan("1001");
+    const itemsA = (await engine.getInvoice(ORDER_A))!.items;
+    for (const item of itemsA) while ((await engine.getInvoice(ORDER_A))!.items.find((i) => i.item_key === item.item_key)!.scanned < item.qty) await engine.handleScan(item.item_code);
+    const r = await engine.handleScan(ORDER_B);
     expect(r).toMatchObject({ type: "order-opened", orderNo: ORDER_B });
-    expect((r as { left?: { outcome: string } }).left?.outcome).toBe("posted");
-    const a = await engine.getInvoice(ORDER_A);
-    expect(a!.invoice.status).toBe("posted");
+    expect((r as { left?: { outcome: string } }).left?.outcome).toBe("closed");
   });
 
   it("مسح بوليصة أخرى دون أي مسح يعيد الحالية جديدة", async () => {
@@ -129,7 +150,9 @@ describe("قواعد المسح", () => {
   it("إعادة مسح بوليصة مرحّلة تستأنفها مع الاحتفاظ بالمسحات", async () => {
     await engine.handleScan(ORDER_A);
     await engine.handleScan("1001");
+    await engine.finishCurrent("post");
     await engine.handleScan(ORDER_B);
+    await engine.finishCurrent("post");
     const r = await engine.handleScan(ORDER_A);
     expect(r).toMatchObject({ type: "order-opened", orderNo: ORDER_A, resumed: true });
     expect((await engine.getInvoice(ORDER_A))!.invoice.done_qty).toBe(1);
@@ -191,14 +214,50 @@ describe("الإنهاء والترحيل", () => {
     expect(report.over[0]).toMatchObject({ orderNo: ORDER_B, code: "2001", count: 1, expected: 1, scanned: 2 });
   });
 
-  it("الفاتورة المغلقة تُعرض للقراءة فقط ولا تقبل مسح أصناف", async () => {
+  it("مسح فاتورة منتهية سبق مراجعتها يسأل: إعادة فتح أو تخطي", async () => {
     await engine.handleScan(ORDER_B);
     for (const c of ["2001", "2002", "2002"]) await engine.handleScan(c);
     await engine.finishCurrent("close");
-    const reopened = await engine.handleScan(ORDER_B);
-    expect(reopened).toMatchObject({ type: "order-opened", readonly: true });
-    expect(await engine.handleScan("2001")).toMatchObject({ type: "locked" });
+    const again = await engine.handleScan(ORDER_B);
+    expect(again).toMatchObject({ type: "already-closed", orderNo: ORDER_B });
+    // التخطي: لا يتغير شيء
+    expect((await engine.getInvoice(ORDER_B))!.invoice.status).toBe("closed");
+    // إعادة الفتح تحفظ المسحات السابقة وتقبل مسحاً جديداً
+    expect(await engine.reopenInvoice(ORDER_B)).toMatchObject({ type: "order-opened", readonly: false, resumed: true });
     expect((await engine.getInvoice(ORDER_B))!.invoice.done_qty).toBe(3);
+    expect(await engine.handleScan("2001")).toMatchObject({ type: "item", kind: "over" });
+  });
+
+  it("الفتح من القائمة لفاتورة منتهية يعرضها للقراءة فقط ولا تقبل مسحاً", async () => {
+    await engine.handleScan(ORDER_B);
+    for (const c of ["2001", "2002", "2002"]) await engine.handleScan(c);
+    await engine.finishCurrent("close");
+    expect(await engine.openInvoice(ORDER_B)).toMatchObject({ type: "order-opened", readonly: true });
+    expect(await engine.handleScan("2001")).toMatchObject({ type: "locked" });
+  });
+
+  it("تعديل الكمية: زيادة تُسجل مقبولة ثم زائدة، والإنقاص يحذف آخر مسحة", async () => {
+    await engine.handleScan(ORDER_A);
+    const item = (await engine.getInvoice(ORDER_A))!.items[0];
+    expect(await engine.adjustItem(ORDER_A, item.item_key, 1)).toMatchObject({ changed: true, scanned: 1 });
+    for (let i = 1; i < item.qty; i += 1) await engine.adjustItem(ORDER_A, item.item_key, 1);
+    expect(await engine.adjustItem(ORDER_A, item.item_key, 1)).toMatchObject({ changed: true, scanned: item.qty + 1 });
+    expect((await engine.getInvoice(ORDER_A))!.invoice.over_scans).toBe(1);
+    expect(await engine.adjustItem(ORDER_A, item.item_key, -1)).toMatchObject({ changed: true, scanned: item.qty });
+    expect((await engine.getInvoice(ORDER_A))!.invoice.over_scans).toBe(0);
+    for (let i = 0; i < item.qty; i += 1) await engine.adjustItem(ORDER_A, item.item_key, -1);
+    expect(await engine.adjustItem(ORDER_A, item.item_key, -1)).toMatchObject({ changed: false });
+  });
+
+  it("البنود بترتيب شيت Excel الأصلي وأخطاء الفاتورة مجمّعة بالكود", async () => {
+    await engine.handleScan(ORDER_A);
+    const items = (await engine.getInvoice(ORDER_A))!.items;
+    expect(items.map((i) => i.seq)).toEqual([...items.map((i) => i.seq)].sort((x, y) => x - y));
+    await engine.handleScan("9999");
+    await engine.handleScan("9999");
+    await engine.handleScan("8888");
+    const errors = await engine.invoiceErrors(ORDER_A);
+    expect(errors.map((e) => `${e.code}x${e.count}`)).toEqual(["8888x1", "9999x2"]);
   });
 
   it("التراجع عن آخر مسح", async () => {

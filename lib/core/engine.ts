@@ -1,4 +1,4 @@
-import { codeKey, fitsItemCode, normalizeCode } from "./codes";
+import { MAX_ITEM_CODE_LENGTH, codeKey, fitsItemCode, normalizeCode } from "./codes";
 import type { ImportRow } from "./importer";
 
 /* ------------------------------------------------------------------ */
@@ -36,6 +36,8 @@ export interface InvoiceView extends InvoiceRow {
   progress: number;
 }
 export interface ItemRow {
+  /** ترتيب البند كما ورد في شيت Excel. */
+  seq: number;
   order_key: string;
   item_key: string;
   item_code: string;
@@ -71,7 +73,17 @@ export type ScanResult =
   | { type: "same-order"; orderKey: string }
   | { type: "order-not-found"; code: string }
   | { type: "no-invoice"; code: string }
-  | { type: "locked"; code: string; orderKey: string };
+  | { type: "locked"; code: string; orderKey: string }
+  /** رقم طلب/فاتورة جديد قبل اكتمال الفاتورة الحالية: لا يبدأ مسح جديد. */
+  | { type: "blocked"; code: string; orderNo: string; shortItems: number }
+  /** الطلب الممسوح فاتورته منتهية ومراجعة سابقاً: يُسأل المستخدم عن إعادة الفتح أو التخطي. */
+  | { type: "already-closed"; code: string; orderKey: string; orderNo: string };
+
+/** أرقام الطلبات والفواتير تبدأ من اليسار بـ 200 أو 204. */
+export const ORDER_PREFIXES = ["200", "204"] as const;
+export function looksLikeOrderNumber(code: string): boolean {
+  return code.length > MAX_ITEM_CODE_LENGTH && ORDER_PREFIXES.some((prefix) => code.startsWith(prefix));
+}
 
 export interface LeftInvoice {
   orderKey: string;
@@ -256,6 +268,7 @@ GROUP BY order_key;
 -- بنود كل طلب: تُجمع الأسطر المتكررة لنفس الكود
 CREATE VIEW v_items AS
 SELECT order_key, item_key,
+       MIN(id) AS seq,
        MIN(item_code) AS item_code,
        group_concat(DISTINCT NULLIF(unit, '')) AS unit,
        SUM(qty) AS qty
@@ -264,7 +277,7 @@ GROUP BY order_key, item_key;
 
 -- تقدم كل بند: عدد المسحات المقبولة (ok + over)
 CREATE VIEW v_item_progress AS
-SELECT i.order_key, i.item_key, i.item_code, i.unit, i.qty,
+SELECT i.order_key, i.item_key, i.seq, i.item_code, i.unit, i.qty,
        COALESCE(s.scanned, 0) AS scanned
 FROM v_items i
 LEFT JOIN (
@@ -291,6 +304,12 @@ LEFT JOIN invoice_state st ON st.order_key = o.order_key
 LEFT JOIN v_item_progress p ON p.order_key = o.order_key
 GROUP BY o.order_key;
 `;
+
+/** فاتورة مفتوحة بدأ مسحها ولم تكتمل: لا يجوز بدء مسح جديد قبلها. */
+function isBlocking(invoice: InvoiceView): boolean {
+  const touched = invoice.done_qty > 0 || invoice.wrong_scans > 0 || invoice.over_scans > 0;
+  return invoice.status === "open" && invoice.short_items > 0 && touched;
+}
 
 function toView(row: InvoiceRow): InvoiceView {
   const progress = row.total_qty > 0 ? Math.round((row.done_qty / row.total_qty) * 100) : 0;
@@ -477,7 +496,7 @@ export class AuditEngine {
     if (!row) return null;
     const items = await this.db.all<ItemRow>(
       `SELECT * FROM v_item_progress WHERE order_key = ?
-       ORDER BY CASE WHEN scanned < qty THEN 0 ELSE 1 END, item_code`,
+       ORDER BY seq`,
       [orderKey],
     );
     return { invoice: toView(row), items };
@@ -513,7 +532,65 @@ export class AuditEngine {
 
   /** فتح فاتورة من القائمة (بدلاً من مسح بوليصتها). */
   openInvoice(orderKey: string): Promise<ScanResult> {
-    return this.enqueue(() => this.tx(() => this.openOrder(orderKey, null, null)));
+    return this.enqueue(() =>
+      this.tx(async () => {
+        const currentKey = await this.readCurrent();
+        const current = currentKey ? await this.readInvoice(currentKey) : null;
+        if (current && current.invoice.order_key !== orderKey && isBlocking(current.invoice)) {
+          return { type: "blocked" as const, code: orderKey, orderNo: current.invoice.order_no, shortItems: current.invoice.short_items };
+        }
+        return this.openOrder(orderKey, current?.invoice ?? null, null);
+      }),
+    );
+  }
+
+  /** إعادة فتح فاتورة منتهية سبق مراجعتها (تُحفظ مسحاتها السابقة). */
+  reopenInvoice(orderKey: string): Promise<ScanResult> {
+    return this.enqueue(() =>
+      this.tx(async () => {
+        const currentKey = await this.readCurrent();
+        const current = currentKey ? await this.readInvoice(currentKey) : null;
+        if (current && current.invoice.order_key !== orderKey && isBlocking(current.invoice)) {
+          return { type: "blocked" as const, code: orderKey, orderNo: current.invoice.order_no, shortItems: current.invoice.short_items };
+        }
+        const target = await this.readInvoice(orderKey);
+        if (!target) return { type: "order-not-found" as const, code: orderKey };
+        if (target.invoice.status !== "closed") return this.openOrder(orderKey, current?.invoice ?? null, null);
+        let left: LeftInvoice | undefined;
+        if (current && current.invoice.order_key !== orderKey && current.invoice.status === "open") left = await this.releaseInvoice(current.invoice);
+        await this.db.run("UPDATE invoice_state SET status = 'open', closed_at = NULL WHERE order_key = ?", [orderKey]);
+        await this.writeCurrent(orderKey);
+        return { type: "order-opened" as const, orderKey, orderNo: target.invoice.order_no, readonly: false, resumed: true, left };
+      }),
+    );
+  }
+
+  /** زيادة أو إنقاص كمية صنف ممسوح يدوياً (تصحيح مشكلة في المسح). */
+  adjustItem(orderKey: string, itemKey: string, delta: 1 | -1): Promise<{ changed: boolean; scanned: number; qty: number; reason?: string }> {
+    return this.enqueue(() =>
+      this.tx(async () => {
+        const invoice = await this.readInvoice(orderKey);
+        const item = invoice?.items.find((candidate) => candidate.item_key === itemKey);
+        if (!invoice || !item) return { changed: false, scanned: 0, qty: 0, reason: "الصنف غير موجود." };
+        if (invoice.invoice.status === "closed") return { changed: false, scanned: item.scanned, qty: item.qty, reason: "الفاتورة منتهية؛ أعد فتحها أولاً." };
+        if (delta === 1) {
+          const kind = item.scanned + 1 > item.qty ? "over" : "ok";
+          await this.db.run("INSERT INTO scans (order_key, item_key, code, kind, at, operator) VALUES (?, ?, ?, ?, ?, ?)", [orderKey, itemKey, item.item_code, kind, this.now(), await this.readSetting("operator")]);
+          return { changed: true, scanned: item.scanned + 1, qty: item.qty };
+        }
+        const [last] = await this.db.all<{ id: number }>("SELECT id FROM scans WHERE order_key = ? AND item_key = ? AND kind IN ('ok', 'over') ORDER BY id DESC LIMIT 1", [orderKey, itemKey]);
+        if (!last) return { changed: false, scanned: item.scanned, qty: item.qty, reason: "لا توجد كمية ممسوحة لإنقاصها." };
+        await this.db.run("DELETE FROM scans WHERE id = ?", [last.id]);
+        return { changed: true, scanned: item.scanned - 1, qty: item.qty };
+      }),
+    );
+  }
+
+  /** الأكواد التي سُجّلت كأخطاء تجهيز على فاتورة (غير موجودة فيها). */
+  invoiceErrors(orderKey: string): Promise<Array<{ code: string; count: number; lastAt: string }>> {
+    return this.enqueue(() =>
+      this.db.all("SELECT code, COUNT(*) AS count, MAX(at) AS lastAt FROM scans WHERE order_key = ? AND kind = 'wrong' GROUP BY code ORDER BY MAX(id) DESC", [orderKey]),
+    );
   }
 
   /* -------------------------------- المسح -------------------------------- */
@@ -556,8 +633,13 @@ export class AuditEngine {
 
     // 3) هل هو رقم طلب/فاتورة؟ (أي كود أطول من 10 لا يُعد صنفاً، والقصير الذي ليس في الفاتورة يُجرَّب هنا أيضاً)
     const target = await this.findOrder(key);
+    if (target && current && current.invoice.order_key === target) return { type: "same-order", orderKey: target };
+    if ((target || looksLikeOrderNumber(code)) && current && isBlocking(current.invoice)) {
+      return { type: "blocked", code, orderNo: current.invoice.order_no, shortItems: current.invoice.short_items };
+    }
     if (target) {
-      if (current && current.invoice.order_key === target) return { type: "same-order", orderKey: target };
+      const targetView = await this.readInvoice(target);
+      if (targetView?.invoice.status === "closed") return { type: "already-closed", code, orderKey: target, orderNo: targetView.invoice.order_no };
       return this.openOrder(target, current?.invoice ?? null, code);
     }
 

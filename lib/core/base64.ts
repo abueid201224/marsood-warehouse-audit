@@ -19,3 +19,18 @@ export function base64ToBytes(input: string): Uint8Array {
   }
   return out;
 }
+
+/** يرمّز بايتات إلى Base64 (لكتابة ملفات ثنائية صغيرة مثل نغمات التنبيه). */
+export function bytesToBase64(bytes: Uint8Array): string {
+  let out = "";
+  for (let i = 0; i < bytes.length; i += 3) {
+    const a = bytes[i];
+    const b = i + 1 < bytes.length ? bytes[i + 1] : 0;
+    const c = i + 2 < bytes.length ? bytes[i + 2] : 0;
+    const chunk = (a << 16) | (b << 8) | c;
+    out += ALPHABET[(chunk >> 18) & 63] + ALPHABET[(chunk >> 12) & 63];
+    out += i + 1 < bytes.length ? ALPHABET[(chunk >> 6) & 63] : "=";
+    out += i + 2 < bytes.length ? ALPHABET[chunk & 63] : "=";
+  }
+  return out;
+}

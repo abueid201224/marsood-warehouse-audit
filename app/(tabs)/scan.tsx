@@ -1,12 +1,16 @@
 import { useCallback, useEffect, useState } from "react";
-import { Switch } from "react-native";
+import { Pressable, Switch } from "react-native";
 import { StyleSheet, Text, View } from "react-native";
 import { useFocusEffect } from "expo-router";
 import * as Haptics from "expo-haptics";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { Button, Card, EmptyState, Header, Metric, Notice, ProgressBar, Screen, SectionTitle, StatusBadge } from "@/components/MarsoodUI";
 import { ScannerInput } from "@/components/ScannerInput";
-import { itemState, type InvoiceView, type ItemRow, type ScanKind, type ScanResult } from "@/lib/core/engine";
+import { ItemsTable, type ErrorCode } from "@/components/ItemsTable";
+import { playAlert } from "@/lib/sound";
+import type { AlertKind } from "@/lib/tones";
+import { Modal } from "react-native";
+import { type InvoiceView, type ItemRow, type ScanKind, type ScanResult } from "@/lib/core/engine";
 import { STATUS_LABELS, formatClock } from "@/lib/core/format";
 import { useEngine } from "@/lib/core/hooks";
 import { palette } from "@/lib/palette";
@@ -55,8 +59,24 @@ function describe(result: ScanResult): Feedback | null {
       return { tone: "danger", title: "رقم الطلب غير موجود", body: `الكود ${result.code} ليس رقم طلب في البيانات المستوردة، وأكواد الأصناف لا تتجاوز 10 خانات.` };
     case "no-invoice":
       return { tone: "warning", title: "امسح رقم الطلب أولاً", body: `لا توجد فاتورة مفتوحة، والكود ${result.code} ليس رقم طلب معروفاً.` };
+    case "blocked":
+      return { tone: "danger", title: "أكمل الفاتورة الحالية أولاً", body: `لا يمكن بدء مسح جديد (${result.code}) قبل انتهاء الفاتورة ${result.orderNo} واكتمالها؛ ينقصها ${result.shortItems} صنف. أكمل مسحها أو رحّلها لاستكمال النواقص.` };
+    case "already-closed":
+      return { tone: "warning", title: "فاتورة سبق مراجعتها", body: `الطلب ${result.orderNo} منتهي سابقاً. اختر إعادة فتحه أو التخطي.` };
     case "locked":
       return { tone: "warning", title: "الفاتورة منتهية", body: `لا يمكن مسح ${result.code} على فاتورة مغلقة. امسح بوليصة أخرى.` };
+  }
+}
+
+function alertKindOf(result: ScanResult): AlertKind | null {
+  switch (result.type) {
+    case "item": return result.kind === "wrong" ? "wrong" : result.kind === "over" ? "over" : null;
+    case "blocked": return "blocked";
+    case "already-closed": return "closed";
+    case "order-not-found":
+    case "no-invoice":
+    case "locked": return "wrong";
+    default: return null;
   }
 }
 
@@ -68,12 +88,6 @@ function buzz(result: ScanResult) {
   Haptics.notificationAsync(kind).catch(() => undefined);
 }
 
-const ITEM_BADGE = {
-  pending: { state: "neutral", label: "لم يُمسح" },
-  partial: { state: "warning", label: "ناقص" },
-  done: { state: "good", label: "مكتمل" },
-  over: { state: "bad", label: "زائد" },
-} as const;
 const KIND_LABEL: Record<ScanKind, string> = { ok: "مقبول", over: "تجهيز زائد", wrong: "خطأ تجهيز", unknown: "غير مرتبط" };
 const KIND_COLOR: Record<ScanKind, string> = { ok: palette.tealDeep, over: palette.amber, wrong: palette.red, unknown: palette.muted };
 
@@ -86,18 +100,59 @@ export default function ScanScreen() {
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [busy, setBusy] = useState(false);
   const [printEnabled, setPrintEnabled] = useState(true);
+  const [soundOn, setSoundOn] = useState(true);
+  const [errorCodes, setErrorCodes] = useState<ErrorCode[]>([]);
+  const [closedPrompt, setClosedPrompt] = useState<{ orderKey: string; orderNo: string } | null>(null);
   const [printRows, setPrintRows] = useState<PrintLogRow[]>([]);
   const { summary: printSummary, reload: reloadPrint } = usePrintSummary(engine);
 
   useEffect(() => {
     if (!engine) return;
     engine.getPrintConfig().then((cfg) => setPrintEnabled(cfg.enabled)).catch(() => undefined);
+    engine.getSetting("sound_enabled").then((value) => setSoundOn(value !== "0")).catch(() => undefined);
   }, [engine, focused]);
 
   // تشغيل الطابور في الخلفية كلما وُجدت مهام منتظرة (الطباعة الصامتة لا تعطّل المسح)
   useEffect(() => {
     if (engine && (printSummary?.pending ?? 0) > 0) kickPrintQueue(engine);
   }, [engine, printSummary?.pending]);
+
+  async function toggleSound() {
+    if (!engine) return;
+    const next = !soundOn;
+    setSoundOn(next);
+    await engine.setSetting("sound_enabled", next ? "1" : "0");
+    if (next) playAlert("closed").catch(() => undefined);
+  }
+
+  async function reopenClosed() {
+    if (!engine || !closedPrompt) return;
+    const target = closedPrompt;
+    setClosedPrompt(null);
+    try {
+      const result = await engine.reopenInvoice(target.orderKey);
+      const next = describe(result);
+      if (result.type === "order-opened") setFeedback({ tone: "success", title: `أُعيد فتح الطلب ${result.orderNo}`, body: "احتُفظ بالمسحات السابقة. امسح الأصناف أو عدّل الكميات." });
+      else if (next) setFeedback(next);
+      if (result.type === "blocked" && soundOn) playAlert("blocked").catch(() => undefined);
+      await refresh();
+    } catch (cause) {
+      setFeedback({ tone: "danger", title: "تعذرت إعادة الفتح", body: cause instanceof Error ? cause.message : "خطأ غير متوقع." });
+    }
+  }
+
+  function skipClosed() {
+    setFeedback({ tone: "info", title: "تم التخطي", body: `بقيت الفاتورة ${closedPrompt?.orderNo ?? ""} منتهية كما هي. تابع المسح.` });
+    setClosedPrompt(null);
+  }
+
+  async function adjust(item: ItemRow, delta: 1 | -1) {
+    if (!engine || !view || busy) return;
+    const result = await engine.adjustItem(view.invoice.order_key, item.item_key, delta);
+    if (!result.changed) setFeedback({ tone: "warning", title: "لم يتغير شيء", body: result.reason ?? "" });
+    else if (soundOn && result.scanned > result.qty) playAlert("over").catch(() => undefined);
+    await refresh();
+  }
 
   async function togglePrint(value: boolean) {
     if (!engine) return;
@@ -123,8 +178,9 @@ export default function ScanScreen() {
       return;
     }
     // استعلامات مستقلة تُنفّذ معاً بدل التتابع بعد كل مسحة (أقل زمن استجابة للقارئ)
-    const [data, scans] = await Promise.all([engine.getInvoice(key), engine.recentScans(key)]);
+    const [data, scans, errs] = await Promise.all([engine.getInvoice(key), engine.recentScans(key), engine.invoiceErrors(key)]);
     setView(data);
+    setErrorCodes(errs.map((e) => ({ code: e.code, count: e.count })));
     setRecent(data ? scans : []);
     if (data?.invoice.status === "closed") engine.printLog().then(setPrintRows).catch(() => undefined);
   }, [engine]);
@@ -145,13 +201,16 @@ export default function ScanScreen() {
         const next = describe(result);
         if (next) setFeedback(next);
         buzz(result);
+        const alertKind = alertKindOf(result);
+        if (alertKind && soundOn) playAlert(alertKind).catch(() => undefined);
+        if (result.type === "already-closed") setClosedPrompt({ orderKey: result.orderKey, orderNo: result.orderNo });
         await refresh();
         kickPrintQueue(engine);
       } catch (cause) {
         setFeedback({ tone: "danger", title: "تعذر تسجيل المسح", body: cause instanceof Error ? cause.message : "خطأ غير متوقع في قاعدة البيانات." });
       }
     },
-    [engine, refresh],
+    [engine, refresh, soundOn],
   );
 
   async function finish(mode: "close" | "post") {
@@ -207,6 +266,10 @@ export default function ScanScreen() {
           {printSummary && printSummary.failed + printSummary.missing > 0 ? ` • تحتاج انتباهاً: ${printSummary.failed + printSummary.missing}` : ""}
         </Text>
       </View>
+      <Pressable onPress={toggleSound} accessibilityRole="switch" accessibilityState={{ checked: soundOn }} accessibilityLabel="التنبيهات الصوتية" style={styles.printBar}>
+        <MaterialCommunityIcons name={soundOn ? "volume-high" : "volume-off"} size={22} color={soundOn ? palette.tealDeep : palette.muted} />
+        <Text style={[styles.printText, { color: soundOn ? palette.tealDeep : palette.muted }]}>{soundOn ? "التنبيهات الصوتية للأخطاء: مفعّلة" : "التنبيهات الصوتية: صامتة"}</Text>
+      </Pressable>
       {feedback ? <Notice title={feedback.title} body={feedback.body} tone={tone} /> : null}
 
       {!invoice ? (
@@ -276,28 +339,7 @@ export default function ScanScreen() {
           ) : null}
             </View>
             <View style={styles.paneMain}>
-          <Card>
-            <SectionTitle title="أصناف الفاتورة" hint="غير المكتملة أولاً" />
-            <View style={styles.tableHead}>
-              <Text style={[styles.th, { flex: 1.2 }]}>الحالة</Text>
-              <Text style={[styles.th, { flex: 0.7 }]}>الممسوح</Text>
-              <Text style={[styles.th, { flex: 0.7 }]}>المطلوب</Text>
-              <Text style={[styles.th, { flex: 0.8 }]}>الوحدة</Text>
-              <Text style={[styles.th, { flex: 1.4 }]}>كود الصنف</Text>
-            </View>
-            {view?.items.map((item) => {
-              const badge = ITEM_BADGE[itemState(item)];
-              return (
-                <View key={item.item_key} style={styles.tr}>
-                  <View style={{ flex: 1.2 }}><StatusBadge state={badge.state} label={badge.label} /></View>
-                  <Text style={[styles.td, { flex: 0.7, fontWeight: "900" }]}>{item.scanned}</Text>
-                  <Text style={[styles.td, { flex: 0.7 }]}>{item.qty}</Text>
-                  <Text style={[styles.td, { flex: 0.8 }]} numberOfLines={1}>{item.unit ?? "—"}</Text>
-                  <Text style={[styles.td, { flex: 1.4, fontWeight: "800" }]} selectable>{item.item_code}</Text>
-                </View>
-              );
-            })}
-          </Card>
+              <ItemsTable items={view?.items ?? []} errors={errorCodes} readonly={!!readonly} onAdjust={adjust} />
 
             </View>
           </View>
@@ -347,28 +389,7 @@ export default function ScanScreen() {
             )}
           </Card>
 
-          <Card>
-            <SectionTitle title="أصناف الفاتورة" hint="غير المكتملة أولاً" />
-            <View style={styles.tableHead}>
-              <Text style={[styles.th, { flex: 1.2 }]}>الحالة</Text>
-              <Text style={[styles.th, { flex: 0.7 }]}>الممسوح</Text>
-              <Text style={[styles.th, { flex: 0.7 }]}>المطلوب</Text>
-              <Text style={[styles.th, { flex: 0.8 }]}>الوحدة</Text>
-              <Text style={[styles.th, { flex: 1.4 }]}>كود الصنف</Text>
-            </View>
-            {view?.items.map((item) => {
-              const badge = ITEM_BADGE[itemState(item)];
-              return (
-                <View key={item.item_key} style={styles.tr}>
-                  <View style={{ flex: 1.2 }}><StatusBadge state={badge.state} label={badge.label} /></View>
-                  <Text style={[styles.td, { flex: 0.7, fontWeight: "900" }]}>{item.scanned}</Text>
-                  <Text style={[styles.td, { flex: 0.7 }]}>{item.qty}</Text>
-                  <Text style={[styles.td, { flex: 0.8 }]} numberOfLines={1}>{item.unit ?? "—"}</Text>
-                  <Text style={[styles.td, { flex: 1.4, fontWeight: "800" }]} selectable>{item.item_code}</Text>
-                </View>
-              );
-            })}
-          </Card>
+              <ItemsTable items={view?.items ?? []} errors={errorCodes} readonly={!!readonly} onAdjust={adjust} />
 
           {recent.length > 0 ? (
             <Card>
@@ -386,11 +407,26 @@ export default function ScanScreen() {
           </>
         )
       )}
+      <Modal visible={!!closedPrompt} transparent animationType="fade" onRequestClose={skipClosed}>
+        <View style={styles.shade}>
+          <View style={styles.dialog}>
+            <MaterialCommunityIcons name="alert-circle-outline" size={44} color={palette.amber} style={{ alignSelf: "center" }} />
+            <Text style={styles.dialogTitle}>فاتورة سبق مراجعتها</Text>
+            <Text style={styles.dialogBody}>الطلب {closedPrompt?.orderNo} مراجَع ومنتهٍ من قبل. هل تريد إعادة فتحه للمراجعة من جديد أم تخطيه؟</Text>
+            <Button title="إعادة فتحها" icon="lock-open-outline" onPress={reopenClosed} />
+            <Button title="تخطي" icon="skip-next" variant="outline" onPress={skipClosed} />
+          </View>
+        </View>
+      </Modal>
     </Screen>
   );
 }
 
 const styles = StyleSheet.create({
+  shade: { flex: 1, backgroundColor: "rgba(17,35,62,0.55)", justifyContent: "center", alignItems: "center", padding: 24 },
+  dialog: { width: "100%", maxWidth: 480, backgroundColor: palette.surface, borderRadius: 22, padding: 22, gap: 12 },
+  dialogTitle: { color: palette.ink, fontSize: 20, fontWeight: "900", textAlign: "center" },
+  dialogBody: { color: palette.inkSoft, fontSize: 14, lineHeight: 22, textAlign: "center" },
   panes: { flexDirection: "row", gap: 16, alignItems: "flex-start" },
   paneSide: { flex: 2, gap: 16, minWidth: 0 },
   paneMain: { flex: 3, gap: 16, minWidth: 0 },
