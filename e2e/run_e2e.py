@@ -329,7 +329,7 @@ def main():
     for attempt in range(6):
         root = dump()
         print(f"--- منتقي الملفات (محاولة {attempt}):", labels(root)[:40], flush=True)
-        n = find(root, "marsood-sample.xlsx")
+        n = find(root, "marsood-sample.xlsx", exact=True) or find(root, "marsood-sample.xlsx")
         if n is not None:
             tap(n)
             picked = True
