@@ -69,18 +69,22 @@ def wait_for(needle, timeout=40, exact=False):
     end = time.time() + timeout
     root = None
     rounds = 0
+    pos = 0
     while time.time() < end:
         root = dump()
         node = find(root, needle, exact)
         if node is not None:
             return node
         rounds += 1
-        if rounds % 8 == 4:
-            for _ in range(3):
+        # تمرير تدريجي (خطوة واحدة كل جولة) كي لا يُقفز فوق العنصر في الصفحات الطويلة
+        if rounds >= 2:
+            if pos < 7:
                 swipe(up=True)
-        elif rounds % 8 == 0:
-            for _ in range(5):
-                swipe(up=False)
+                pos += 1
+            else:
+                for _ in range(8):
+                    swipe(up=False)
+                pos = 0
         time.sleep(1.0)
     print(f"--- لم يظهر «{needle}»؛ العناصر الظاهرة:", flush=True)
     for l in labels(root)[:60]:
