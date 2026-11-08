@@ -294,9 +294,22 @@ def count_prints(path_suffix):
     return sum(1 for p, _ in PRINTS if p.endswith(path_suffix))
 
 
+def handle_permission_dialog():
+    """يمنح إذن التخزين إن ظهرت النافذة (أندرويد ≤12). وجودها غير لازم في الإصدارات الأحدث."""
+    end = time.time() + 6
+    while time.time() < end:
+        root = dump()
+        for n in (root.iter("node") if root is not None else []):
+            if n.attrib.get("resource-id", "").endswith("permission_allow_button") or n.attrib.get("text", "").strip().upper() == "ALLOW":
+                print("--- نافذة إذن التخزين ظهرت؛ نمنح الإذن", flush=True)
+                tap(n)
+                return True
+        time.sleep(1)
+    return False
+
+
 def main():
     print("wm size:", adb("shell", "wm", "size").strip(), "| density:", adb("shell", "wm", "density").strip(), flush=True)
-    adb("shell", "pm", "grant", PKG, "android.permission.READ_EXTERNAL_STORAGE")
     adb("shell", "am", "start", "-n", f"{PKG}/.MainActivity")
     node = wait_for("مِرصاد المستودع", 90)
     check("التطبيق يفتح ولوحة العمل تظهر (قاعدة SQLite تعمل)", node is not None)
@@ -309,6 +322,8 @@ def main():
     tap_text("تحديد ملف (الجهاز / Drive / OneDrive)", 20)
     check("نافذة المصادر تعرض Google Drive وOneDrive", wait_for("OneDrive", 15) is not None and find(dump(), "Google Drive") is not None)
     tap_text("متابعة واختيار الملف", 15)
+    # أندرويد 12 فما دون: تظهر نافذة إذن التخزين؛ ثم يجب أن يفتح المنتقي دائماً
+    handle_permission_dialog()
     time.sleep(3)
     picked = False
     for attempt in range(6):

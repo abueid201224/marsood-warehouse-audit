@@ -96,6 +96,7 @@ export default function ImportScreen() {
   const [map, setMap] = useState<ColumnMap | null>(null);
   const [summary, setSummary] = useState<ImportSummary | null>(null);
   const [sheet, setSheet] = useState(false);
+  const [status, setStatus] = useState("");
 
   const parsed = useMemo(() => (preview && map ? mapRows(preview, map) : null), [preview, map]);
   const stats = useMemo(() => {
@@ -117,11 +118,15 @@ export default function ImportScreen() {
   async function chooseFile() {
     setSheet(false);
     setError(""); setSummary(null);
+    setBusy(true);
+    setStatus("جارٍ فتح منتقي الملفات…");
     try {
       const access = await ensureStorageAccess();
       if (access === "denied") setError("لم يُمنح إذن التخزين العام؛ سيُفتح منتقي النظام ويمكنك اختيار الملف منه مباشرة.");
+      setStatus("اختر الملف من المنتقي…");
       const picked = await DocumentPicker.getDocumentAsync({ type: "*/*", copyToCacheDirectory: true, multiple: false });
       if (picked.canceled || !picked.assets?.[0]) return;
+      setStatus("جارٍ نسخ الملف وقراءته…");
       const asset = picked.assets[0];
       const ext = asset.name.split(".").pop()?.toLowerCase() ?? "";
       const mime = (asset.mimeType ?? "").toLowerCase();
@@ -136,7 +141,6 @@ export default function ImportScreen() {
         setError("حجم الملف أكبر من 25 ميغابايت. قسّم الملف إلى أجزاء.");
         return;
       }
-      setBusy(true);
       const data = await readBytes(asset.uri);
       if (data.byteLength > MAX_FILE_BYTES) throw new Error("حجم الملف أكبر من 25 ميغابايت.");
       let next: SheetPreview;
@@ -159,6 +163,7 @@ export default function ImportScreen() {
       setError(cause instanceof Error ? cause.message : "تعذر قراءة الملف المحدد.");
     } finally {
       setBusy(false);
+      setStatus("");
     }
   }
 
@@ -191,6 +196,7 @@ export default function ImportScreen() {
   return (
     <Screen>
       <Header title="استيراد جدول الفواتير" subtitle="ملف Excel بخمسة أعمدة: رقم الطلب، رقم الفاتورة، كود الصنف، الوحدة، الكمية" right={<Pressable onPress={() => router.back()} style={styles.backButton}><MaterialCommunityIcons name="arrow-right" size={20} color={palette.ink} /><Text style={styles.backText}>رجوع</Text></Pressable>} />
+      {status ? <Notice title="جارٍ العمل" body={status} tone="info" /> : null}
       {error || engineError ? <Notice title="يلزم الانتباه" body={error || engineError} tone="danger" /> : null}
 
       {summary ? (

@@ -6,6 +6,9 @@ on:
       profile:
         description: "AVD profile (pixel_6 phone, pixel_tablet tablet)"
         default: pixel_6
+      api:
+        description: "Android API level (30 exercises the storage permission dialog)"
+        default: "34"
 
 jobs:
   e2e:
@@ -55,7 +58,7 @@ jobs:
       - name: Run end-to-end test
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 34
+          api-level: ${{ github.event.inputs.api || '34' }}
           arch: x86_64
           profile: ${{ github.event.inputs.profile || 'pixel_6' }}
           disable-animations: true
