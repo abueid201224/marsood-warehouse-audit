@@ -31,7 +31,9 @@ jobs:
       - name: Prebuild and build x86_64 release APK
         run: |
           npx expo prebuild --platform android --no-install
-          cd android && ./gradlew assembleRelease --no-daemon -PreactNativeArchitectures=x86_64
+          cd android
+          for i in 1 2 3 4 5 6; do ./gradlew --version --no-daemon && break; echo "gradle distribution download failed ($i); retrying in 40s"; sleep 40; done
+          ./gradlew assembleRelease --no-daemon -PreactNativeArchitectures=x86_64
 
       - name: Create sample workbook
         run: |
