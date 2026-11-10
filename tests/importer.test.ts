@@ -29,7 +29,7 @@ describe("قراءة جدول الأعمدة الخمسة", () => {
     const grid = [["الكمية", "الوحدة", "كود الصنف", "رقم الفاتورة", "رقم الطلب"], [3, "قطعة", "1001", "INV1", "5550001112223"]];
     const preview = inspectGrid(grid, "f.xlsx");
     expect(preview.positional).toBe(false);
-    expect(preview.columnMap).toEqual({ order: 4, invoice: 3, item: 2, unit: 1, qty: 0 });
+    expect(preview.columnMap).toEqual({ order: 4, invoice: 3, item: 2, unit: 1, qty: 0, desc: null });
     const parsed = mapRows(preview, preview.columnMap);
     expect(parsed.rows).toHaveLength(1);
     expect(parsed.rows[0]).toMatchObject({ orderNo: "5550001112223", invoiceNo: "INV1", itemCode: "1001", unit: "قطعة", qty: 3 });
@@ -78,5 +78,25 @@ describe("قراءة جدول الأعمدة الخمسة", () => {
     const parsed = mapRows(preview, { ...preview.columnMap, item: null });
     expect(parsed.rows).toHaveLength(0);
     expect(parsed.errors[0].message).toContain("كود الصنف");
+  });
+});
+
+describe("العمود السادس: بيان الصنف", () => {
+  it("يتعرف على ITEM DESQ ولا يخلطه مع كود الصنف", () => {
+    const grid = [["Order No", "Invoice No", "Item Code", "Unit", "Qty", "ITEM DESQ"], ["2001234567890", "INV1", "1001", "PCS", 2, "زيت محرك 1 لتر"]];
+    const preview = inspectGrid(grid, "f.xlsx");
+    expect(preview.columnMap).toEqual({ order: 0, invoice: 1, item: 2, unit: 3, qty: 4, desc: 5 });
+    expect(mapRows(preview, preview.columnMap).rows[0]).toMatchObject({ itemCode: "1001", desc: "زيت محرك 1 لتر" });
+  });
+  it("بلا عناوين: العمود السادس هو البيان، وغيابه لا يمنع الاستيراد", () => {
+    const six = inspectGrid([["2001234567890", "I", "1001", "PCS", 2, "وصف"]], "f.xlsx");
+    expect(mapRows(six, six.columnMap).rows[0].desc).toBe("وصف");
+    const five = inspectGrid([["2001234567890", "I", "1001", "PCS", 2]], "f.xlsx");
+    expect(mapRows(five, five.columnMap).rows[0].desc).toBe("");
+  });
+  it("عنوان عربي «بيان الصنف»", () => {
+    const preview = inspectGrid([["رقم الطلب", "رقم الفاتورة", "كود الصنف", "الوحدة", "الكمية", "بيان الصنف"], ["2001234567890", "I", "1001", "قطعة", 1, "x"]], "f.xlsx");
+    expect(preview.columnMap.desc).toBe(5);
+    expect(preview.columnMap.item).toBe(2);
   });
 });

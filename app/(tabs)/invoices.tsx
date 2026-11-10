@@ -83,6 +83,10 @@ export default function InvoicesScreen() {
           setMessage(`أكمل الفاتورة ${result.orderNo} أولاً (ينقصها ${result.shortItems} صنف) أو رحّلها من شاشة المسح قبل فتح فاتورة أخرى.`);
           return;
         }
+        if (result.type === "not-today") {
+          setMessage(`الطلب ${result.orderNo} مسجل بتاريخ ${result.day} وليس في جدول اليوم، فلا يُقبل مسحه. استورد ملف اليوم أولاً.`);
+          return;
+        }
         setMessage("");
         router.navigate("/scan");
       } catch (cause) {

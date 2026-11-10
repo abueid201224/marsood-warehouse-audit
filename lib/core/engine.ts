@@ -42,6 +42,8 @@ export interface ItemRow {
   item_key: string;
   item_code: string;
   unit: string | null;
+  /** بيان الصنف (ITEM DESQ) من ملف الاستيراد. */
+  item_desc: string | null;
   qty: number;
   scanned: number;
 }
@@ -68,10 +70,12 @@ export interface Stats {
 
 export type ScanResult =
   | { type: "empty" }
-  | { type: "item"; kind: "ok" | "over" | "wrong"; code: string; orderKey: string; scanned?: number; qty?: number }
+  | { type: "item"; kind: "ok" | "over" | "wrong"; code: string; orderKey: string; scanned?: number; qty?: number; desc?: string }
   | { type: "order-opened"; orderKey: string; orderNo: string; readonly: boolean; resumed: boolean; left?: LeftInvoice }
   | { type: "same-order"; orderKey: string }
   | { type: "order-not-found"; code: string }
+  /** فاتورة غير مسجلة في جدول اليوم (استُوردت في يوم سابق ولم تبدأ مراجعتها): لا يُقبل مسحها. */
+  | { type: "not-today"; code: string; orderKey: string; orderNo: string; day: string }
   | { type: "no-invoice"; code: string }
   | { type: "locked"; code: string; orderKey: string }
   /** رقم طلب/فاتورة جديد قبل اكتمال الفاتورة الحالية: لا يبدأ مسح جديد. */
@@ -208,6 +212,7 @@ CREATE TABLE IF NOT EXISTS lines (
   item_code TEXT NOT NULL,
   item_key TEXT NOT NULL,
   unit TEXT NOT NULL DEFAULT '',
+  item_desc TEXT NOT NULL DEFAULT '',
   qty REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_lines_order ON lines(order_key, item_key);
@@ -271,13 +276,14 @@ SELECT order_key, item_key,
        MIN(id) AS seq,
        MIN(item_code) AS item_code,
        group_concat(DISTINCT NULLIF(unit, '')) AS unit,
+       MIN(NULLIF(item_desc, '')) AS item_desc,
        SUM(qty) AS qty
 FROM lines
 GROUP BY order_key, item_key;
 
 -- تقدم كل بند: عدد المسحات المقبولة (ok + over)
 CREATE VIEW v_item_progress AS
-SELECT i.order_key, i.item_key, i.seq, i.item_code, i.unit, i.qty,
+SELECT i.order_key, i.item_key, i.seq, i.item_code, i.unit, i.item_desc, i.qty,
        COALESCE(s.scanned, 0) AS scanned
 FROM v_items i
 LEFT JOIN (
@@ -309,6 +315,13 @@ GROUP BY o.order_key;
 function isBlocking(invoice: InvoiceView): boolean {
   const touched = invoice.done_qty > 0 || invoice.wrong_scans > 0 || invoice.over_scans > 0;
   return invoice.status === "open" && invoice.short_items > 0 && touched;
+}
+
+/** تاريخ اليوم المحلي (YYYY-MM-DD) لقيمة ISO. */
+export function localDay(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso.slice(0, 10);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
 function toView(row: InvoiceRow): InvoiceView {
@@ -346,6 +359,9 @@ export class AuditEngine {
   init(): Promise<void> {
     return this.enqueue(async () => {
       await this.db.exec("PRAGMA journal_mode = WAL;");
+      // ترقية الجدول القديم قبل إعادة إنشاء الـ Views التي تعتمد على العمود الجديد
+      const existing = await this.db.all<{ name: string }>("PRAGMA table_info(lines)");
+      if (existing.length > 0) await this.addColumnIfMissing("lines", "item_desc", "TEXT NOT NULL DEFAULT ''");
       await this.db.exec(SCHEMA);
       // ترقية قواعد البيانات المنشأة بإصدار سابق
       await this.addColumnIfMissing("scans", "operator", "TEXT");
@@ -394,13 +410,13 @@ export class AuditEngine {
           }
           for (let start = 0; start < list.length; start += 50) {
             const chunk = list.slice(start, start + 50);
-            const placeholders = chunk.map(() => "(?,?,?,?,?,?,?,?,?,?)").join(",");
+            const placeholders = chunk.map(() => "(?,?,?,?,?,?,?,?,?,?,?)").join(",");
             const params: SqlValue[] = [];
             for (const row of chunk) {
-              params.push(imp.lastId, row.sourceRow, row.orderNo, key, row.invoiceNo, codeKey(row.invoiceNo), row.itemCode, codeKey(row.itemCode), row.unit, row.qty);
+              params.push(imp.lastId, row.sourceRow, row.orderNo, key, row.invoiceNo, codeKey(row.invoiceNo), row.itemCode, codeKey(row.itemCode), row.unit, row.desc ?? "", row.qty);
             }
             await this.db.run(
-              `INSERT INTO lines (import_id, src_row, order_no, order_key, invoice_no, invoice_key, item_code, item_key, unit, qty) VALUES ${placeholders}`,
+              `INSERT INTO lines (import_id, src_row, order_no, order_key, invoice_no, invoice_key, item_code, item_key, unit, item_desc, qty) VALUES ${placeholders}`,
               params,
             );
             inserted += chunk.length;
@@ -539,6 +555,9 @@ export class AuditEngine {
         if (current && current.invoice.order_key !== orderKey && isBlocking(current.invoice)) {
           return { type: "blocked" as const, code: orderKey, orderNo: current.invoice.order_no, shortItems: current.invoice.short_items };
         }
+        const target = await this.readInvoice(orderKey);
+        const staleDay = target ? await this.staleRegistration(target.invoice) : null;
+        if (target && staleDay) return { type: "not-today" as const, code: orderKey, orderKey, orderNo: target.invoice.order_no, day: staleDay };
         return this.openOrder(orderKey, current?.invoice ?? null, null);
       }),
     );
@@ -606,6 +625,22 @@ export class AuditEngine {
     return byInvoice?.order_key ?? null;
   }
 
+  /** يوم تسجيل الطلب (آخر استيراد حمله) بالتوقيت المحلي، أو null لبيانات قديمة بلا استيراد. */
+  private async registrationDay(orderKey: string): Promise<string | null> {
+    const [row] = await this.db.all<{ at: string | null }>(
+      "SELECT MAX(i.imported_at) AS at FROM lines l JOIN imports i ON i.id = l.import_id WHERE l.order_key = ?",
+      [orderKey],
+    );
+    return row?.at ? localDay(row.at) : null;
+  }
+
+  /** فاتورة جديدة (لم تبدأ) سُجّلت في يوم غير اليوم الحالي => ليست ضمن جدول اليوم. */
+  private async staleRegistration(target: InvoiceView): Promise<string | null> {
+    if (target.status !== "new") return null;
+    const day = await this.registrationDay(target.order_key);
+    return day && day !== localDay(this.now()) ? day : null;
+  }
+
   private async processScan(raw: string): Promise<ScanResult> {
     const code = normalizeCode(raw);
     if (!code) return { type: "empty" };
@@ -621,7 +656,7 @@ export class AuditEngine {
       if (item) {
         const kind = item.scanned + 1 > item.qty ? "over" : "ok";
         await this.db.run("INSERT INTO scans (order_key, item_key, code, kind, at, operator) VALUES (?, ?, ?, ?, ?, ?)", [current.invoice.order_key, key, code, kind, at, operator]);
-        return { type: "item", kind, code, orderKey: current.invoice.order_key, scanned: item.scanned + 1, qty: item.qty };
+        return { type: "item", kind, code, orderKey: current.invoice.order_key, scanned: item.scanned + 1, qty: item.qty, desc: item.item_desc ?? undefined };
       }
     }
 
@@ -637,9 +672,16 @@ export class AuditEngine {
     if ((target || looksLikeOrderNumber(code)) && current && isBlocking(current.invoice)) {
       return { type: "blocked", code, orderNo: current.invoice.order_no, shortItems: current.invoice.short_items };
     }
+    // رقم طلب/فاتورة غير مسجل في الجدول المستورد: يُرفض دائماً (حتى مع وجود فاتورة مفتوحة) ويُسجل كمسح مجهول
+    if (!target && looksLikeOrderNumber(code)) {
+      await this.db.run("INSERT INTO scans (order_key, item_key, code, kind, at, operator) VALUES (NULL, ?, ?, 'unknown', ?, ?)", [key, code, at, operator]);
+      return { type: "order-not-found", code };
+    }
     if (target) {
       const targetView = await this.readInvoice(target);
       if (targetView?.invoice.status === "closed") return { type: "already-closed", code, orderKey: target, orderNo: targetView.invoice.order_no };
+      const staleDay = targetView ? await this.staleRegistration(targetView.invoice) : null;
+      if (targetView && staleDay) return { type: "not-today", code, orderKey: target, orderNo: targetView.invoice.order_no, day: staleDay };
       return this.openOrder(target, current?.invoice ?? null, code);
     }
 

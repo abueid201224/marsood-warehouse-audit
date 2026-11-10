@@ -43,8 +43,8 @@ function describe(result: ScanResult): Feedback | null {
     case "empty":
       return null;
     case "item":
-      if (result.kind === "ok") return { tone: "success", title: `تم مسح ${result.code}`, body: `الممسوح ${result.scanned} من ${result.qty}` };
-      if (result.kind === "over") return { tone: "warning", title: "تجهيز زائد", body: `الكود ${result.code}: الممسوح ${result.scanned} والمطلوب ${result.qty}. سُجّل في تقرير الأخطاء.` };
+      if (result.kind === "ok") return { tone: "success", title: `تم مسح ${result.code}`, body: `${result.desc ? `${result.desc}\n` : ""}الممسوح ${result.scanned} من ${result.qty}` };
+      if (result.kind === "over") return { tone: "warning", title: "تجهيز زائد", body: `${result.desc ? `${result.desc}\n` : ""}الكود ${result.code}: الممسوح ${result.scanned} والمطلوب ${result.qty}. سُجّل في تقرير الأخطاء.` };
       return { tone: "danger", title: "خطأ تجهيز", body: `الكود ${result.code} غير موجود في هذه الفاتورة. سُجّل في تقرير الأخطاء.` };
     case "order-opened": {
       const left = result.left
@@ -56,7 +56,9 @@ function describe(result: ScanResult): Feedback | null {
     case "same-order":
       return { tone: "info", title: "هذه هي الفاتورة المفتوحة", body: "امسح أصنافها، أو امسح بوليصة أخرى للانتقال." };
     case "order-not-found":
-      return { tone: "danger", title: "رقم الطلب غير موجود", body: `الكود ${result.code} ليس رقم طلب في البيانات المستوردة، وأكواد الأصناف لا تتجاوز 10 خانات.` };
+      return { tone: "danger", title: "رقم الطلب غير موجود", body: `تنبيه: الفاتورة ${result.code} غير مسجلة في جدول اليوم المستورد، ولا يُقبل مسحها. تأكد من استيراد ملف اليوم (أكواد الأصناف لا تتجاوز 10 خانات).` };
+    case "not-today":
+      return { tone: "danger", title: "فاتورة غير مسجلة لليوم", body: `الطلب ${result.orderNo} مسجل بتاريخ ${result.day} وليس في جدول اليوم، فلا يُقبل مسحه. استورد ملف اليوم أولاً.` };
     case "no-invoice":
       return { tone: "warning", title: "امسح رقم الطلب أولاً", body: `لا توجد فاتورة مفتوحة، والكود ${result.code} ليس رقم طلب معروفاً.` };
     case "blocked":
@@ -74,6 +76,7 @@ function alertKindOf(result: ScanResult): AlertKind | null {
     case "blocked": return "blocked";
     case "already-closed": return "closed";
     case "order-not-found":
+    case "not-today":
     case "no-invoice":
     case "locked": return "wrong";
     default: return null;
@@ -312,7 +315,7 @@ export default function ScanScreen() {
             ) : (
               <View style={styles.actions}>
                 <View style={styles.action}>
-                  <Button title="إنهاء الفاتورة" icon="check-circle-outline" onPress={() => finish("close")} disabled={busy || invoice.short_items > 0} />
+                  <Button title="إنهاء الفاتورة" icon="check-circle-outline" variant={invoice.short_items === 0 ? "success" : "outline"} onPress={() => finish("close")} disabled={busy} />
                 </View>
                 <View style={styles.action}>
                   <Button title="ترحيل لاستكمال النواقص" icon="arrow-right-bold-box-outline" variant="secondary" onPress={() => finish("post")} disabled={busy || invoice.short_items === 0} />
@@ -377,7 +380,7 @@ export default function ScanScreen() {
             ) : (
               <View style={styles.actions}>
                 <View style={styles.action}>
-                  <Button title="إنهاء الفاتورة" icon="check-circle-outline" onPress={() => finish("close")} disabled={busy || invoice.short_items > 0} />
+                  <Button title="إنهاء الفاتورة" icon="check-circle-outline" variant={invoice.short_items === 0 ? "success" : "outline"} onPress={() => finish("close")} disabled={busy} />
                 </View>
                 <View style={styles.action}>
                   <Button title="ترحيل لاستكمال النواقص" icon="arrow-right-bold-box-outline" variant="secondary" onPress={() => finish("post")} disabled={busy || invoice.short_items === 0} />

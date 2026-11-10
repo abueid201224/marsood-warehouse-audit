@@ -1,7 +1,7 @@
 import { MAX_ITEM_CODE_LENGTH, normalizeCode, parseQuantity } from "./codes";
 
 /** الأعمدة الخمسة المطلوبة في ملف Excel. */
-export type FieldKey = "order" | "invoice" | "item" | "unit" | "qty";
+export type FieldKey = "order" | "invoice" | "item" | "unit" | "qty" | "desc";
 export type ColumnMap = Record<FieldKey, number | null>;
 export type Cell = string | number;
 
@@ -11,8 +11,11 @@ export const FIELD_LABELS: Record<FieldKey, string> = {
   item: "كود الصنف",
   unit: "الوحدة",
   qty: "الكمية",
+  desc: "بيان الصنف",
 };
-export const FIELD_ORDER: FieldKey[] = ["order", "invoice", "item", "unit", "qty"];
+export const FIELD_ORDER: FieldKey[] = ["order", "invoice", "item", "unit", "qty", "desc"];
+/** أعمدة اختيارية: لا يمنع غيابها الاستيراد. */
+export const OPTIONAL_FIELDS: FieldKey[] = ["invoice", "unit", "desc"];
 
 export interface SheetPreview {
   fileName: string;
@@ -33,6 +36,8 @@ export interface ImportRow {
   itemCode: string;
   unit: string;
   qty: number;
+  /** بيان الصنف (ITEM DESQ) إن وُجد العمود. */
+  desc?: string;
   sourceRow: number;
 }
 export interface ImportRowError {
@@ -50,6 +55,7 @@ const HEADER_TERMS: Record<FieldKey, string[]> = {
   invoice: ["invoice", "invoice no", "invoice number", "invoice #", "inv", "inv no", "رقم الفاتوره", "الفاتوره", "فاتوره"],
   item: ["item code", "item", "item no", "code", "sku", "barcode", "product code", "كود الصنف", "كود", "رمز الصنف", "رقم الصنف", "الصنف", "كود المنتج", "باركود", "الباركود"],
   unit: ["unit", "uom", "unit of measure", "الوحده", "وحده"],
+  desc: ["item desq", "item desc", "item description", "item name", "description", "desq", "desc", "بيان الصنف", "بيان", "وصف الصنف", "الوصف", "وصف", "اسم الصنف", "اسم المنتج"],
   qty: ["qty", "quantity", "count", "الكميه", "كميه", "الكمية", "كمية", "العدد", "عدد"],
 };
 
@@ -66,7 +72,7 @@ function headerText(value: unknown): string {
 }
 
 export function detectColumns(headerRow: unknown[]): ColumnMap {
-  const map: ColumnMap = { order: null, invoice: null, item: null, unit: null, qty: null };
+  const map: ColumnMap = { order: null, invoice: null, item: null, unit: null, qty: null, desc: null };
   const used = new Set<number>();
   const cells = headerRow.map(headerText);
   // مطابقة تامة أولاً ثم احتواء، بترتيب الأخصّ فالأعم لتجنب أن يلتقط «كود» عمود «رقم الطلب».
@@ -108,7 +114,7 @@ export function inspectGrid(
   if (!cleaned.some(nonEmpty)) throw new Error("ورقة العمل فارغة.");
 
   let headerRowIndex = -1;
-  let columnMap: ColumnMap = { order: 0, invoice: 1, item: 2, unit: 3, qty: 4 };
+  let columnMap: ColumnMap = { order: 0, invoice: 1, item: 2, unit: 3, qty: 4, desc: 5 };
   let positional = true;
   for (let index = 0; index < Math.min(cleaned.length, 30); index += 1) {
     const candidate = detectColumns(cleaned[index]);
@@ -159,7 +165,7 @@ export function inspectWorkbook(
 export function mapRows(preview: SheetPreview, map: ColumnMap): ParsedImport {
   const rows: ImportRow[] = [];
   const errors: ImportRowError[] = [];
-  const missing = FIELD_ORDER.filter((key) => key !== "invoice" && key !== "unit" && map[key] === null);
+  const missing = FIELD_ORDER.filter((key) => !OPTIONAL_FIELDS.includes(key) && map[key] === null);
   if (missing.length > 0) {
     return {
       rows,
@@ -175,6 +181,7 @@ export function mapRows(preview: SheetPreview, map: ColumnMap): ParsedImport {
     const invoiceNo = cellText(at(cells, "invoice"));
     const itemCode = normalizeCode(at(cells, "item"));
     const unit = cellText(at(cells, "unit"));
+    const desc = cellText(at(cells, "desc"));
     const qty = parseQuantity(at(cells, "qty"));
     const issues: string[] = [];
     if (!orderNo) issues.push("رقم الطلب فارغ");
@@ -186,7 +193,7 @@ export function mapRows(preview: SheetPreview, map: ColumnMap): ParsedImport {
       errors.push({ sourceRow, message: issues.join("، ") });
       return;
     }
-    rows.push({ orderNo, invoiceNo, itemCode, unit, qty: qty as number, sourceRow });
+    rows.push({ orderNo, invoiceNo, itemCode, unit, qty: qty as number, desc, sourceRow });
   });
   return { rows, errors, totalRows: preview.rows.length };
 }

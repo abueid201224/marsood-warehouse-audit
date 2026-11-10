@@ -22,10 +22,10 @@ export function memoryDb(): Db {
   };
 }
 
-export async function makeEngine() {
+export async function makeEngine(clock?: () => string) {
   let tick = 0;
   // ساعة اصطناعية متزايدة لضمان ترتيب ثابت للأحداث
-  const engine = new AuditEngine(memoryDb(), () => new Date(Date.UTC(2026, 10, 5, 8, 0, tick++)).toISOString());
+  const engine = new AuditEngine(memoryDb(), clock ?? (() => new Date(Date.UTC(2026, 10, 5, 8, 0, tick++)).toISOString()));
   await engine.init();
   return engine;
 }

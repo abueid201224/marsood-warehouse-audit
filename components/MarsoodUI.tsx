@@ -73,11 +73,11 @@ export function Button({
   title: string;
   onPress: () => void;
   icon?: keyof typeof MaterialCommunityIcons.glyphMap;
-  variant?: "primary" | "secondary" | "outline" | "danger";
+  variant?: "primary" | "secondary" | "outline" | "danger" | "success";
   disabled?: boolean;
   compact?: boolean;
 }) {
-  const color = variant === "primary" ? palette.white : variant === "danger" ? palette.red : palette.ink;
+  const color = variant === "primary" || variant === "success" ? palette.white : variant === "danger" ? palette.red : palette.ink;
   return (
     <Pressable
       accessibilityRole="button"
@@ -91,6 +91,9 @@ export function Button({
         variant === "secondary" && styles.buttonSecondary,
         variant === "outline" && styles.buttonOutline,
         variant === "danger" && styles.buttonDanger,
+        // ألوان صريحة مضمونة الظهور (بعض شاشات سامسونج تُخفي الألوان المعتمدة على السمات)
+        variant === "primary" && { backgroundColor: "#0B3B4A", borderWidth: 2, borderColor: "#0B3B4A" },
+        variant === "success" && { backgroundColor: "#047857", borderWidth: 2, borderColor: "#047857" },
         disabled && styles.buttonDisabled,
         pressed && !disabled && { opacity: 0.82, transform: [{ scale: 0.99 }] },
       ]}

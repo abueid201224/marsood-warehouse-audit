@@ -309,3 +309,31 @@ describe("التقرير والإحصاء", () => {
     expect(await engine.getCurrent()).toBeNull();
   });
 });
+
+describe("بيان الصنف وجدول اليوم", () => {
+  it("يُخزَّن بيان الصنف ويُعاد مع البنود وعند المسح", async () => {
+    const e = await makeEngine();
+    await e.importRows([{ orderNo: ORDER_A, invoiceNo: "I", itemCode: "1001", unit: "قطعة", qty: 1, desc: "زيت محرك 5W-30", sourceRow: 1 }], "d.xlsx");
+    await e.handleScan(ORDER_A);
+    const r = await e.handleScan("1001");
+    expect(r).toMatchObject({ type: "item", kind: "ok", desc: "زيت محرك 5W-30" });
+    expect((await e.getInvoice(ORDER_A))!.items[0].item_desc).toBe("زيت محرك 5W-30");
+  });
+
+  it("رقم غير مسجل يُرفض بتنبيه حتى بلا فاتورة مفتوحة", async () => {
+    expect(await engine.handleScan("20099999999999")).toMatchObject({ type: "order-not-found" });
+    expect(await engine.getCurrent()).toBeNull();
+  });
+
+  it("فاتورة استُوردت في يوم سابق ولم تبدأ لا تُقبل، وتُقبل بعد استيرادها اليوم", async () => {
+    let clock = "2026-11-01T09:00:00.000Z";
+    const e = await makeEngine(() => clock);
+    await e.importRows(SAMPLE, "old.xlsx");
+    clock = "2026-11-03T09:00:00.000Z";
+    expect(await e.handleScan(ORDER_A)).toMatchObject({ type: "not-today", orderNo: ORDER_A });
+    expect(await e.getCurrent()).toBeNull();
+    expect(await e.openInvoice(ORDER_A)).toMatchObject({ type: "not-today" });
+    await e.importRows(SAMPLE, "today.xlsx");
+    expect(await e.handleScan(ORDER_A)).toMatchObject({ type: "order-opened", orderNo: ORDER_A });
+  });
+});

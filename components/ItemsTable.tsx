@@ -47,6 +47,7 @@ const Row = memo(function Row({ item, adjustable, onAdjust }: { item: ItemRow; a
       <Text style={[styles.td, { flex: 0.6 }]}>{item.qty}</Text>
       <Text style={[styles.td, { flex: 0.7 }]} numberOfLines={1}>{item.unit ?? "—"}</Text>
       <Text style={[styles.td, { flex: 1.3, fontWeight: "800" }]} selectable>{item.item_code}</Text>
+      <Text style={[styles.td, styles.desc, { flex: 2 }]} numberOfLines={2}>{item.item_desc || "—"}</Text>
     </View>
   );
 });
@@ -90,6 +91,7 @@ export function ItemsTable({ items, errors, readonly, onAdjust }: { items: ItemR
             <Text style={[styles.th, { flex: 0.6 }]}>المطلوب</Text>
             <Text style={[styles.th, { flex: 0.7 }]}>الوحدة</Text>
             <Text style={[styles.th, { flex: 1.3 }]}>كود الصنف</Text>
+            <Text style={[styles.th, { flex: 2 }]}>بيان الصنف</Text>
           </View>
           {rows.length === 0 ? <Text style={styles.empty}>{filter === "short" ? "لا توجد أصناف ناقصة." : "لا توجد أصناف زائدة."}</Text> : rows.map((item) => <Row key={item.item_key} item={item} adjustable={!readonly} onAdjust={onAdjust} />)}
         </>
@@ -109,6 +111,7 @@ const styles = StyleSheet.create({
   th: { color: palette.muted, fontSize: 12, fontWeight: "800", textAlign: "right" },
   tr: { flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: palette.line },
   td: { color: palette.text, fontSize: 15, textAlign: "right" },
+  desc: { fontSize: 13, color: palette.inkSoft },
   qtyCell: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8 },
   scanned: { color: palette.ink, fontSize: 17, fontWeight: "900", minWidth: 26, textAlign: "center" },
   step: { width: 36, height: 36, borderRadius: 11, borderWidth: 1, borderColor: palette.line, backgroundColor: palette.surfaceMuted, alignItems: "center", justifyContent: "center" },

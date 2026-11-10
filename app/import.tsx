@@ -310,7 +310,7 @@ export default function ImportScreen() {
 
   return (
     <Screen>
-      <Header title="استيراد جدول الفواتير" subtitle="ملف Excel بخمسة أعمدة: رقم الطلب، رقم الفاتورة، كود الصنف، الوحدة، الكمية" right={<Pressable onPress={() => router.back()} style={styles.backButton}><MaterialCommunityIcons name="arrow-right" size={20} color={palette.ink} /><Text style={styles.backText}>رجوع</Text></Pressable>} />
+      <Header title="استيراد جدول الفواتير" subtitle="ملف Excel بستة أعمدة: رقم الطلب، رقم الفاتورة، كود الصنف، الوحدة، الكمية، بيان الصنف (ITEM DESQ)" right={<Pressable onPress={() => router.back()} style={styles.backButton}><MaterialCommunityIcons name="arrow-right" size={20} color={palette.ink} /><Text style={styles.backText}>رجوع</Text></Pressable>} />
       {status ? <Notice title="جارٍ العمل" body={status} tone="info" /> : null}
       {error || engineError ? <Notice title="يلزم الانتباه" body={error || engineError} tone="danger" /> : null}
 
@@ -384,7 +384,7 @@ export default function ImportScreen() {
           </Card>
 
           <Card>
-            <SectionTitle title="ربط الأعمدة" hint={preview.positional ? "لم تُعرف العناوين؛ افتُرض الترتيب: الطلب، الفاتورة، الصنف، الوحدة، الكمية. عدّل عند اللزوم." : "عُرفت الأعمدة من العناوين؛ راجعها قبل الاستيراد."} />
+            <SectionTitle title="ربط الأعمدة" hint={preview.positional ? "لم تُعرف العناوين؛ افتُرض الترتيب: الطلب، الفاتورة، الصنف، الوحدة، الكمية، البيان. عدّل عند اللزوم." : "عُرفت الأعمدة من العناوين؛ راجعها قبل الاستيراد."} />
             <View style={styles.columnsGrid}>
               {FIELD_ORDER.map((key) => (
                 <ColumnSelect key={key} label={FIELD_LABELS[key]} required={REQUIRED.includes(key)} value={map[key]} headers={preview.headers} onChange={(value) => setMap((current) => (current ? { ...current, [key]: value } : current))} />
@@ -402,7 +402,7 @@ export default function ImportScreen() {
               {parsed.rows.length > 0 ? (
                 <View style={styles.previewTable}>
                   <View style={styles.previewHead}>
-                    {["الطلب", "الفاتورة", "كود الصنف", "الوحدة", "الكمية"].map((title) => <Text key={title} style={[styles.previewCell, styles.previewHeadText]}>{title}</Text>)}
+                    {["الطلب", "الفاتورة", "كود الصنف", "الوحدة", "الكمية", "البيان"].map((title) => <Text key={title} style={[styles.previewCell, styles.previewHeadText]}>{title}</Text>)}
                   </View>
                   {parsed.rows.slice(0, 6).map((row) => (
                     <View key={row.sourceRow} style={styles.previewRow}>
@@ -411,6 +411,7 @@ export default function ImportScreen() {
                       <Text style={styles.previewCell} numberOfLines={1}>{row.itemCode}</Text>
                       <Text style={styles.previewCell} numberOfLines={1}>{row.unit || "—"}</Text>
                       <Text style={styles.previewCell}>{row.qty}</Text>
+                      <Text style={styles.previewCell} numberOfLines={1}>{row.desc || "—"}</Text>
                     </View>
                   ))}
                 </View>
