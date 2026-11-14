@@ -120,6 +120,11 @@ export function AdminPanel({ engine, session }: { engine: AuditEngine; session: 
           </Card>
 
           <Card>
+            <SectionTitle title="إنتاجية المشغّلين" hint="الوحدات والفواتير والأخطاء ومعدل الساعة لكل مشغّل" />
+            <Button title="عرض الإنتاجية" icon="chart-bar" variant="outline" onPress={() => router.push("/productivity")} />
+          </Card>
+
+          <Card>
             <SectionTitle title="سجل التدقيق" hint="كل الإجراءات باسم المشغّل — للإضافة فقط ولا يمكن تعديله" />
             <Button title="عرض السجل" icon="clipboard-text-clock-outline" variant="outline" onPress={() => router.push("/audit")} />
           </Card>

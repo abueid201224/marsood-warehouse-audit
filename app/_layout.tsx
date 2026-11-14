@@ -22,6 +22,7 @@ export default function RootLayout() {
           <Stack.Screen name="(tabs)" />
           <Stack.Screen name="import" />
           <Stack.Screen name="audit" />
+          <Stack.Screen name="productivity" />
         </Stack>
       </SafeAreaProvider>
     </GestureHandlerRootView>

@@ -171,6 +171,21 @@ export interface PrintLogRow {
   fileName: string;
   updatedAt: string;
 }
+export interface OperatorStat {
+  operator: string;
+  ok: number;
+  over: number;
+  wrong: number;
+  /** مدة النشاط الفعلية بالثواني (الفجوات حتى دقيقتين بين مسحتين متتاليتين). */
+  activeSeconds: number;
+  closed: number;
+  posted: number;
+  firstAt: string;
+  lastAt: string;
+}
+/** أقصى عدد محاولات للطباعة التلقائية قبل التوقف وطلب تدخل المشرف. */
+export const PRINT_MAX_ATTEMPTS = 6;
+
 export type PrintSummary = Record<PrintStatus, number>;
 
 /** مؤشرات الأداء اللوجستية. null = لا بيانات كافية بعد. */
@@ -1041,6 +1056,69 @@ export class AuditEngine {
     return this.enqueue(async () => {
       const result = await this.db.run("UPDATE print_jobs SET status = 'pending', detail = NULL, updated_at = ? WHERE status IN ('failed', 'missing')", [this.now()]);
       return result.changes;
+    });
+  }
+
+  /**
+   * إعادة محاولة تلقائية بتأخير متزايد: الفاشلة (خطأ شبكة/طابعة) 1، 2، 4… دقيقة حتى 10،
+   * والمفقودة (ملف PDF لم يصل بعد) كل 3 دقائق؛ حتى PRINT_MAX_ATTEMPTS محاولات.
+   */
+  autoRetryPrints(nowMs: number = Date.parse(this.now())): Promise<number> {
+    return this.enqueue(async () => {
+      const rows = await this.db.all<{ order_key: string; kind: PrintKind; status: PrintStatus; attempts: number; updated_at: string }>(
+        "SELECT order_key, kind, status, attempts, updated_at FROM print_jobs WHERE status IN ('failed', 'missing') AND attempts < ?",
+        [PRINT_MAX_ATTEMPTS],
+      );
+      let count = 0;
+      for (const row of rows) {
+        const waitMin = row.status === "missing" ? 3 : Math.min(10, 2 ** Math.max(0, row.attempts - 1));
+        if (nowMs - Date.parse(row.updated_at) < waitMin * 60_000) continue;
+        await this.db.run("UPDATE print_jobs SET status = 'pending', updated_at = ? WHERE order_key = ? AND kind = ?", [this.now(), row.order_key, row.kind]);
+        count += 1;
+      }
+      return count;
+    });
+  }
+
+  /** مهام الطباعة التي تحتاج تدخلاً (فاشلة أو ملف مفقود) مع التفاصيل. */
+  async printProblems(): Promise<PrintLogRow[]> {
+    return (await this.printLog()).filter((row) => row.status === "failed" || row.status === "missing");
+  }
+
+  /** إنتاجية المشغّلين منذ تاريخ معيّن (ISO) أو كل الفترة. للمشرف فقط. */
+  operatorStats(sinceIso: string | null): Promise<OperatorStat[]> {
+    return this.enqueue(async () => {
+      await this.requireSession("supervisor");
+      const since = sinceIso ?? "0000";
+      const rows = await this.db.all<{ operator: string; ok: number; over: number; wrong: number; active_s: number; first_at: string; last_at: string }>(
+        `WITH s AS (
+           SELECT operator, at, kind,
+                  (julianday(at) - julianday(LAG(at) OVER (PARTITION BY operator ORDER BY at, id))) * 86400.0 AS gap
+           FROM scans
+           WHERE operator IS NOT NULL AND operator <> '' AND kind IN ('ok', 'over', 'wrong') AND at >= ?
+         )
+         SELECT operator,
+                COALESCE(SUM(kind = 'ok'), 0) AS ok, COALESCE(SUM(kind = 'over'), 0) AS over, COALESCE(SUM(kind = 'wrong'), 0) AS wrong,
+                COALESCE(SUM(CASE WHEN gap IS NOT NULL AND gap <= 120 THEN gap ELSE 0 END), 0) AS active_s,
+                MIN(at) AS first_at, MAX(at) AS last_at
+         FROM s GROUP BY operator ORDER BY (COALESCE(SUM(kind = 'ok'), 0) + COALESCE(SUM(kind = 'over'), 0)) DESC`,
+        [since],
+      );
+      const events = await this.db.all<{ operator: string; event: string; n: number }>(
+        "SELECT operator, event, COUNT(*) AS n FROM audit_log WHERE event IN ('close', 'post') AND operator IS NOT NULL AND at >= ? GROUP BY operator, event",
+        [since],
+      );
+      return rows.map((r) => ({
+        operator: r.operator,
+        ok: r.ok,
+        over: r.over,
+        wrong: r.wrong,
+        activeSeconds: Math.round(r.active_s),
+        closed: events.find((e) => e.operator === r.operator && e.event === "close")?.n ?? 0,
+        posted: events.find((e) => e.operator === r.operator && e.event === "post")?.n ?? 0,
+        firstAt: r.first_at,
+        lastAt: r.last_at,
+      }));
     });
   }
 

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Tabs } from "expo-router";
 import { LoginGate } from "@/components/LoginGate";
 import { useEngine } from "@/lib/core/hooks";
+import { startPrintWatchdog } from "@/lib/print/runtime";
 import { backupQuietly } from "@/lib/backup/files";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useLayout } from "@/lib/layout";
@@ -24,6 +25,7 @@ export default function TabLayout() {
   useEffect(() => {
     if (engine && signedIn) backupQuietly(engine, "start");
   }, [engine, signedIn]);
+  useEffect(() => (engine && signedIn ? startPrintWatchdog(engine) : undefined), [engine, signedIn]);
   if (!engine) return null;
   if (!signedIn) return <LoginGate engine={engine} />;
   return (

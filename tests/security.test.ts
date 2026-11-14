@@ -115,3 +115,59 @@ describe("النسخ الاحتياطي والاستعادة", () => {
     expect((await e.getStats()).total).toBe(1);
   });
 });
+
+describe("إعادة محاولة الطباعة التلقائية", () => {
+  async function failedJob(clock: () => string, status: "failed" | "missing", attempts: number) {
+    const e = await makeEngine(clock);
+    await e.importRows(rows, "f.xlsx");
+    await e.requeuePrint(ORDER.replace(/^0+/, ""));
+    const db = (e as unknown as { db: { run: (s: string, p?: unknown[]) => Promise<unknown> } }).db;
+    await db.run("UPDATE print_jobs SET status = ?, attempts = ?, updated_at = ?", [status, attempts, "2026-11-01T10:00:00.000Z"]);
+    return e;
+  }
+
+  it("الفاشلة تُعاد بعد مهلة متزايدة فقط", async () => {
+    const e = await failedJob(() => "2026-11-01T10:00:30.000Z", "failed", 2);
+    // محاولتان => مهلة دقيقتين
+    expect(await e.autoRetryPrints(Date.parse("2026-11-01T10:01:00.000Z"))).toBe(0);
+    expect(await e.autoRetryPrints(Date.parse("2026-11-01T10:02:10.000Z"))).toBe(2);
+    expect((await e.printSummary()).pending).toBe(2);
+  });
+
+  it("المفقودة كل 3 دقائق، وتتوقف عند الحد الأقصى", async () => {
+    const e = await failedJob(() => "2026-11-01T10:00:30.000Z", "missing", 1);
+    expect(await e.autoRetryPrints(Date.parse("2026-11-01T10:02:00.000Z"))).toBe(0);
+    expect(await e.autoRetryPrints(Date.parse("2026-11-01T10:03:30.000Z"))).toBe(2);
+    const spent = await failedJob(() => "2026-11-01T10:00:30.000Z", "failed", 6);
+    expect(await spent.autoRetryPrints(Date.parse("2026-11-02T10:00:00.000Z"))).toBe(0);
+    expect((await spent.printProblems()).length).toBe(2);
+  });
+});
+
+describe("إنتاجية المشغّلين", () => {
+  it("تحسب الوحدات والأخطاء ووقت النشاط (الفجوات الطويلة لا تُحتسب)", async () => {
+    let t = Date.parse("2026-11-02T08:00:00.000Z");
+    const e = await makeEngine(() => new Date(t).toISOString());
+    await e.createOperator("سالم", "1234");
+    await e.importRows([...rows, { orderNo: ORDER, invoiceNo: "I1", itemCode: "1002", unit: "", qty: 1, sourceRow: 2 }], "f.xlsx");
+    t += 1000; await e.handleScan(ORDER);
+    t += 30_000; await e.handleScan("1001");
+    t += 30_000; await e.handleScan("7777");     // خطأ تجهيز
+    t += 3_600_000; await e.handleScan("1002");  // فجوة ساعة: لا تُحتسب
+    await e.finishCurrent("close");
+    const stats = await e.operatorStats(null);
+    expect(stats).toHaveLength(1);
+    expect(stats[0]).toMatchObject({ operator: "سالم", ok: 2, wrong: 1, closed: 1 });
+    expect(stats[0].activeSeconds).toBe(30);
+    expect(await e.operatorStats("2030-01-01T00:00:00.000Z")).toHaveLength(0);
+  });
+
+  it("للمشرف فقط", async () => {
+    const e = await makeEngine();
+    await e.createOperator("مشرف", "1234");
+    await e.createOperator("عامل", "5678", "operator");
+    await e.logout();
+    await e.login("عامل", "5678");
+    await expect(e.operatorStats(null)).rejects.toThrow("للمشرف");
+  });
+});

@@ -50,3 +50,16 @@ export async function clearPdfIndex(engine: AuditEngine): Promise<void> {
   await engine.clearPrintIndex();
   await deleteCopiedPdfs();
 }
+
+/** يراقب الطباعة: يعيد المحاولة تلقائياً للفاشل/المفقود بتأخير متزايد ويطلق الطابور. */
+export function startPrintWatchdog(engine: AuditEngine): () => void {
+  const tick = () => {
+    engine
+      .autoRetryPrints()
+      .then((n) => { if (n > 0) kickPrintQueue(engine); })
+      .catch(() => undefined);
+  };
+  tick();
+  const id = setInterval(tick, 60_000);
+  return () => clearInterval(id);
+}

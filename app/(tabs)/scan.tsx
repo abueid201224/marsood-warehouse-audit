@@ -6,6 +6,7 @@ import * as Haptics from "expo-haptics";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { backupQuietly } from "@/lib/backup/files";
 import { Button, Card, EmptyState, Header, Metric, Notice, ProgressBar, Screen, SectionTitle, StatusBadge } from "@/components/MarsoodUI";
+import { PrintAlert } from "@/components/PrintAlert";
 import { ScannerInput } from "@/components/ScannerInput";
 import { ItemsTable, type ErrorCode } from "@/components/ItemsTable";
 import { playAlert } from "@/lib/sound";
@@ -262,6 +263,7 @@ export default function ScanScreen() {
       <Header title="المسح" subtitle="امسح رقم الطلب من البوليصة ثم أصناف الفاتورة" />
       {error ? <Notice title="تعذر فتح قاعدة البيانات" body={error} tone="danger" /> : null}
       <ScannerInput onScan={onScan} disabled={!focused || !engine} />
+      <PrintAlert engine={engine} />
       <View style={styles.printBar}>
         <Switch value={printEnabled} onValueChange={togglePrint} trackColor={{ true: palette.teal, false: palette.line }} accessibilityLabel="الطباعة التلقائية" />
         <MaterialCommunityIcons name={printEnabled ? "printer-check" : "printer-off"} size={20} color={printEnabled ? palette.tealDeep : palette.red} />
