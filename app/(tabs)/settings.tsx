@@ -186,6 +186,7 @@ export default function SettingsScreen() {
           <View style={styles.action}><Button title="اختبار الاتصال" icon="lan-connect" variant="outline" compact onPress={() => testConnection(labelPrinter, "البوليصات")} disabled={busy} /></View>
           <View style={styles.action}><Button title="صفحة اختبار" icon="file-send-outline" variant="outline" compact onPress={() => testPage(labelPrinter, "البوليصات")} disabled={busy} /></View>
         </View>
+        <Button title="حفظ الإعدادات" icon="content-save-outline" onPress={saveBasics} disabled={busy || !engine} />
         <Text style={styles.hint}>الطباعة الصامتة تعمل مع الطابعات التي تدعم IPP واستلام PDF مباشرة، والجهاز على الشبكة المحلية نفسها.</Text>
       </Card>
 
