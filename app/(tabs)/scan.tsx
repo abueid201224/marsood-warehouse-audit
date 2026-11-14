@@ -4,6 +4,7 @@ import { StyleSheet, Text, View } from "react-native";
 import { useFocusEffect } from "expo-router";
 import * as Haptics from "expo-haptics";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
+import { backupQuietly } from "@/lib/backup/files";
 import { Button, Card, EmptyState, Header, Metric, Notice, ProgressBar, Screen, SectionTitle, StatusBadge } from "@/components/MarsoodUI";
 import { ScannerInput } from "@/components/ScannerInput";
 import { ItemsTable, type ErrorCode } from "@/components/ItemsTable";
@@ -232,6 +233,7 @@ export default function ScanScreen() {
       }
       await refresh();
       kickPrintQueue(engine);
+      if (result.ok) backupQuietly(engine, "event");
     } catch (cause) {
       setFeedback({ tone: "danger", title: "تعذر الإنهاء", body: cause instanceof Error ? cause.message : "خطأ غير متوقع." });
     } finally {

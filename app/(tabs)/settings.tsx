@@ -1,10 +1,11 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { StyleSheet, Switch, Text, TextInput, View } from "react-native";
 import { useFocusEffect } from "expo-router";
 import { Button, Card, Header, Notice, Screen, SectionTitle } from "@/components/MarsoodUI";
 import type { PrintConfig } from "@/lib/core/engine";
 import { useEngine } from "@/lib/core/hooks";
 import { palette } from "@/lib/palette";
+import { AdminPanel } from "@/components/AdminPanel";
 import { SourceSheet } from "@/components/SourceSheet";
 import { ensureStorageAccess } from "@/lib/access";
 import { addPdfFiles, clearPdfIndex, chooseFolderAndIndex, inspectPrinter, kickPrintQueue, reindexNow, sendTestPage } from "@/lib/print/runtime";
@@ -16,9 +17,14 @@ type Tone = "info" | "success" | "danger" | "warning";
 export default function SettingsScreen() {
   const { engine, error } = useEngine();
   const { summary, reload } = usePrintSummary(engine);
+  const [session, setSession] = useState(engine?.getSession() ?? null);
+  useEffect(() => {
+    if (!engine) return;
+    setSession(engine.getSession());
+    return engine.subscribeSession(() => setSession(engine.getSession()));
+  }, [engine]);
   const [config, setConfig] = useState<PrintConfig | null>(null);
   const [counts, setCounts] = useState<{ invoices: number; labels: number } | null>(null);
-  const [operator, setOperator] = useState("");
   const [invoicePrinter, setInvoicePrinter] = useState("");
   const [labelPrinter, setLabelPrinter] = useState("");
   const [note, setNote] = useState<{ tone: Tone; title: string; body: string } | null>(null);
@@ -31,7 +37,6 @@ export default function SettingsScreen() {
       .then(([cfg, idx]) => {
         setConfig(cfg);
         setCounts(idx);
-        setOperator(cfg.operator ?? "");
         setInvoicePrinter(cfg.invoicePrinter ?? "");
         setLabelPrinter(cfg.labelPrinter ?? "");
       })
@@ -61,10 +66,9 @@ export default function SettingsScreen() {
   const saveBasics = () =>
     run(async () => {
       if (!engine) return;
-      await engine.setSetting("operator", operator.trim());
       await engine.setSetting("printer_invoice", invoicePrinter.trim());
       await engine.setSetting("printer_label", labelPrinter.trim());
-      setNote({ tone: "success", title: "تم الحفظ", body: "حُفظت إعدادات المشغّل والطابعات." });
+      setNote({ tone: "success", title: "تم الحفظ", body: "حُفظت إعدادات الطابعات." });
       load();
     });
 
@@ -185,11 +189,7 @@ export default function SettingsScreen() {
         <Text style={styles.hint}>الطباعة الصامتة تعمل مع الطابعات التي تدعم IPP واستلام PDF مباشرة، والجهاز على الشبكة المحلية نفسها.</Text>
       </Card>
 
-      <Card style={styles.cell}>
-        <SectionTitle title="المشغّل" hint="يظهر اسمه في تقرير الأخطاء لتتبع المسؤولية" />
-        <TextInput value={operator} onChangeText={setOperator} placeholder="اسم المشغّل" placeholderTextColor={palette.subtle} style={styles.input} textAlign="right" />
-        <Button title="حفظ الإعدادات" icon="content-save-outline" onPress={saveBasics} disabled={busy || !engine} />
-      </Card>
+      {engine && session ? <AdminPanel engine={engine} session={session} /> : null}
       </View>
       <SourceSheet visible={sheet === "files"} kind="pdf" onConfirm={addFiles} onCancel={() => setSheet(null)} />
     </Screen>

@@ -311,6 +311,11 @@ def handle_permission_dialog():
 def main():
     print("wm size:", adb("shell", "wm", "size").strip(), "| density:", adb("shell", "wm", "density").strip(), flush=True)
     adb("shell", "am", "start", "-n", f"{PKG}/.MainActivity")
+    check("شاشة إعداد المشرف تظهر عند أول تشغيل", wait_for("إعداد حساب المشرف", 90) is not None)
+    check("حقل الاسم", fill_edit("الاسم", "Supervisor"))
+    check("حقل PIN", fill_edit("رمز PIN", "1234"))
+    check("حقل تأكيد PIN", fill_edit("تأكيد رمز PIN", "1234"))
+    tap_text("إنشاء الحساب والدخول", 20)
     node = wait_for("مِرصاد المستودع", 90)
     check("التطبيق يفتح ولوحة العمل تظهر (قاعدة SQLite تعمل)", node is not None)
     if node is None:
@@ -368,7 +373,6 @@ def main():
     check("عدد المفهرس صحيح (2 فاتورة و1 بوليصة)", wait_for("عُثر على 2 فاتورة", 10) is not None)
     check("إدخال عنوان طابعة الفواتير", fill_edit("192.168.1.50", "10.0.2.2:8631/inv"))
     check("إدخال عنوان طابعة البوليصات", fill_edit("192.168.1.51", "10.0.2.2:8631/lbl"))
-    check("إدخال اسم المشغّل", fill_edit("اسم المشغّل", "Tester"))
     tap_text("حفظ الإعدادات", 20)
     for _ in range(6):
         swipe(up=False)
@@ -460,10 +464,21 @@ def main():
     check("شاشة التقرير تعرض أخطاء التجهيز", wait_for("أخطاء التجهيز", 20) is not None)
     root = dump()
     check("التقرير يسرد الكود الخاطئ 9999", find(root, "9999") is not None)
-    check("التقرير يسجل اسم المشغّل", find(root, "Tester") is not None)
+    check("التقرير يسجل اسم المشغّل", find(root, "Supervisor") is not None)
     check("سجل الطباعة في التقرير", wait_for("سجل الطباعة الصامتة", 40) is not None)
     tap_tab("لوحة العمل", "مراجعة فواتير التجهيز")
     check("لوحة العمل تعرض مؤشرات الأداء", wait_for("مؤشرات الأداء", 20) is not None)
+
+    # ---------- المشغّلون والتدقيق والنسخ الاحتياطي ----------
+    tap_tab("الإعدادات", "الطباعة التلقائية")
+    check("لوحة المشرف: المشغّلون", wait_for("المشغّلون", 25) is not None)
+    check("لوحة المشرف: النسخ الاحتياطي", wait_for("نسخ احتياطي الآن", 25) is not None)
+    tap_text("نسخ احتياطي الآن", 20)
+    check("نسخة احتياطية ناجحة", wait_for("تم النسخ الاحتياطي", 40) is not None)
+    tap_text("عرض السجل", 20)
+    check("سجل التدقيق يعرض الاستيراد", wait_for("استيراد", 25) is not None)
+    check("سجل التدقيق يعرض إنهاء الفواتير", find(dump(), "إنهاء فاتورة") is not None or find(dump(), "ترحيل فاتورة") is not None)
+    tap_text("رجوع", 15)
 
 
 try:

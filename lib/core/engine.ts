@@ -1,5 +1,6 @@
 import { MAX_ITEM_CODE_LENGTH, codeKey, fitsItemCode, normalizeCode } from "./codes";
 import type { ImportRow } from "./importer";
+import { hashPin, randomSalt } from "./sha256";
 
 /* ------------------------------------------------------------------ */
 /* واجهة قاعدة البيانات (expo-sqlite على Android، node:sqlite في الاختبارات) */
@@ -238,6 +239,26 @@ CREATE INDEX IF NOT EXISTS idx_scans_order ON scans(order_key, item_key, kind);
 CREATE INDEX IF NOT EXISTS idx_scans_at ON scans(at);
 CREATE INDEX IF NOT EXISTS idx_scans_kind ON scans(kind, code);
 CREATE TABLE IF NOT EXISTS app_state (key TEXT PRIMARY KEY NOT NULL, value TEXT);
+CREATE TABLE IF NOT EXISTS operators (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  salt TEXT NOT NULL,
+  pin_hash TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'operator',
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS audit_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  at TEXT NOT NULL,
+  operator TEXT,
+  event TEXT NOT NULL,
+  ref TEXT,
+  detail TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_audit_at ON audit_log(at);
+CREATE TRIGGER IF NOT EXISTS audit_no_update BEFORE UPDATE ON audit_log BEGIN SELECT RAISE(ABORT, 'audit log is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS audit_no_delete BEFORE DELETE ON audit_log BEGIN SELECT RAISE(ABORT, 'audit log is append-only'); END;
 CREATE TABLE IF NOT EXISTS print_files (
   ref_key TEXT NOT NULL,
   kind TEXT NOT NULL,
@@ -329,6 +350,19 @@ function toView(row: InvoiceRow): InvoiceView {
   return { ...row, progress };
 }
 
+export type Role = "supervisor" | "operator";
+export interface Session { id: number; name: string; role: Role }
+export interface OperatorRow { id: number; name: string; role: Role; active: number }
+export interface AuditRow { id: number; at: string; operator: string | null; event: string; ref: string | null; detail: string | null }
+/** الجداول التي تُنسخ احتياطياً وتُستعاد (الإعدادات، البيانات، الطباعة). */
+export const SNAPSHOT_TABLES = ["imports", "lines", "invoice_state", "scans", "app_state", "print_files", "print_jobs"] as const;
+export interface Snapshot {
+  app: "marsood";
+  format: 1;
+  createdAt: string;
+  tables: Record<string, { columns: string[]; rows: SqlValue[][] }>;
+}
+
 export class AuditEngine {
   private chain: Promise<unknown> = Promise.resolve();
 
@@ -381,6 +415,7 @@ export class AuditEngine {
   importRows(rows: ImportRow[], fileName: string): Promise<ImportSummary> {
     return this.enqueue(() =>
       this.tx(async () => {
+        await this.requireSession();
         const at = this.now();
         const byOrder = new Map<string, ImportRow[]>();
         for (const row of rows) {
@@ -422,6 +457,7 @@ export class AuditEngine {
             inserted += chunk.length;
           }
         }
+        await this.audit("import", fileName, `${inserted} سطر / ${byOrder.size - skippedOrders.length} طلب / استبدال ${replaced} / تخطي ${skippedOrders.length}`);
         return { inserted, orders: byOrder.size - skippedOrders.length, replaced, skippedOrders };
       }),
     );
@@ -431,6 +467,8 @@ export class AuditEngine {
   resetAll(): Promise<void> {
     return this.enqueue(() =>
       this.tx(async () => {
+        await this.requireSession("supervisor");
+        await this.audit("reset", null, "مسح كل بيانات الجلسة");
         for (const table of ["scans", "invoice_state", "lines", "imports", "print_jobs"]) {
           await this.db.run(`DELETE FROM ${table}`);
         }
@@ -550,6 +588,7 @@ export class AuditEngine {
   openInvoice(orderKey: string): Promise<ScanResult> {
     return this.enqueue(() =>
       this.tx(async () => {
+        await this.requireSession();
         const currentKey = await this.readCurrent();
         const current = currentKey ? await this.readInvoice(currentKey) : null;
         if (current && current.invoice.order_key !== orderKey && isBlocking(current.invoice)) {
@@ -567,6 +606,7 @@ export class AuditEngine {
   reopenInvoice(orderKey: string): Promise<ScanResult> {
     return this.enqueue(() =>
       this.tx(async () => {
+        await this.requireSession();
         const currentKey = await this.readCurrent();
         const current = currentKey ? await this.readInvoice(currentKey) : null;
         if (current && current.invoice.order_key !== orderKey && isBlocking(current.invoice)) {
@@ -579,6 +619,7 @@ export class AuditEngine {
         if (current && current.invoice.order_key !== orderKey && current.invoice.status === "open") left = await this.releaseInvoice(current.invoice);
         await this.db.run("UPDATE invoice_state SET status = 'open', closed_at = NULL WHERE order_key = ?", [orderKey]);
         await this.writeCurrent(orderKey);
+        await this.audit("reopen", target.invoice.order_no, "إعادة فتح فاتورة منتهية");
         return { type: "order-opened" as const, orderKey, orderNo: target.invoice.order_no, readonly: false, resumed: true, left };
       }),
     );
@@ -588,18 +629,21 @@ export class AuditEngine {
   adjustItem(orderKey: string, itemKey: string, delta: 1 | -1): Promise<{ changed: boolean; scanned: number; qty: number; reason?: string }> {
     return this.enqueue(() =>
       this.tx(async () => {
+        await this.requireSession();
         const invoice = await this.readInvoice(orderKey);
         const item = invoice?.items.find((candidate) => candidate.item_key === itemKey);
         if (!invoice || !item) return { changed: false, scanned: 0, qty: 0, reason: "الصنف غير موجود." };
         if (invoice.invoice.status === "closed") return { changed: false, scanned: item.scanned, qty: item.qty, reason: "الفاتورة منتهية؛ أعد فتحها أولاً." };
         if (delta === 1) {
           const kind = item.scanned + 1 > item.qty ? "over" : "ok";
-          await this.db.run("INSERT INTO scans (order_key, item_key, code, kind, at, operator) VALUES (?, ?, ?, ?, ?, ?)", [orderKey, itemKey, item.item_code, kind, this.now(), await this.readSetting("operator")]);
+          await this.db.run("INSERT INTO scans (order_key, item_key, code, kind, at, operator) VALUES (?, ?, ?, ?, ?, ?)", [orderKey, itemKey, item.item_code, kind, this.now(), await this.operatorName()]);
+          await this.audit("adjust", invoice.invoice.order_no, `+1 ${item.item_code}`);
           return { changed: true, scanned: item.scanned + 1, qty: item.qty };
         }
         const [last] = await this.db.all<{ id: number }>("SELECT id FROM scans WHERE order_key = ? AND item_key = ? AND kind IN ('ok', 'over') ORDER BY id DESC LIMIT 1", [orderKey, itemKey]);
         if (!last) return { changed: false, scanned: item.scanned, qty: item.qty, reason: "لا توجد كمية ممسوحة لإنقاصها." };
         await this.db.run("DELETE FROM scans WHERE id = ?", [last.id]);
+        await this.audit("adjust", invoice.invoice.order_no, `-1 ${item.item_code}`);
         return { changed: true, scanned: item.scanned - 1, qty: item.qty };
       }),
     );
@@ -615,7 +659,10 @@ export class AuditEngine {
   /* -------------------------------- المسح -------------------------------- */
 
   handleScan(raw: string): Promise<ScanResult> {
-    return this.enqueue(() => this.tx(() => this.processScan(raw)));
+    return this.enqueue(() => this.tx(async () => {
+      await this.requireSession();
+      return this.processScan(raw);
+    }));
   }
 
   private async findOrder(key: string): Promise<string | null> {
@@ -646,7 +693,7 @@ export class AuditEngine {
     if (!code) return { type: "empty" };
     const key = codeKey(code);
     const at = this.now();
-    const operator = await this.readSetting("operator");
+    const operator = await this.operatorName();
     const currentKey = await this.readCurrent();
     const current = currentKey ? await this.readInvoice(currentKey) : null;
 
@@ -714,6 +761,7 @@ export class AuditEngine {
       [targetKey, at, scannedRef],
     );
     await this.writeCurrent(targetKey);
+    await this.audit("open", target.invoice.order_no, status === "new" ? "بدء مراجعة" : "استئناف");
     return { type: "order-opened", orderKey: targetKey, orderNo: target.invoice.order_no, readonly: false, resumed: status === "posted" || target.invoice.done_qty > 0, left };
   }
 
@@ -744,6 +792,7 @@ export class AuditEngine {
   finishCurrent(mode: "close" | "post"): Promise<{ ok: boolean; outcome?: LeftInvoice["outcome"]; reason?: string; orderNo?: string }> {
     return this.enqueue(() =>
       this.tx(async () => {
+        await this.requireSession();
         const currentKey = await this.readCurrent();
         const current = currentKey ? await this.readInvoice(currentKey) : null;
         if (!current) return { ok: false, reason: "لا توجد فاتورة مفتوحة." };
@@ -762,6 +811,7 @@ export class AuditEngine {
           outcome = "posted";
         }
         await this.writeCurrent(null);
+        await this.audit(outcome === "closed" ? "close" : outcome === "posted" ? "post" : "release", current.invoice.order_no, `ناقص ${current.invoice.short_items} صنف`);
         return { ok: true, outcome, orderNo: current.invoice.order_no };
       }),
     );
@@ -771,9 +821,11 @@ export class AuditEngine {
   undoLastScan(orderKey: string): Promise<{ removed: boolean; code?: string }> {
     return this.enqueue(() =>
       this.tx(async () => {
+        await this.requireSession();
         const [last] = await this.db.all<{ id: number; code: string }>("SELECT id, code FROM scans WHERE order_key = ? ORDER BY id DESC LIMIT 1", [orderKey]);
         if (!last) return { removed: false };
         await this.db.run("DELETE FROM scans WHERE id = ?", [last.id]);
+        await this.audit("undo", orderKey, `إلغاء مسحة ${last.code}`);
         return { removed: true, code: last.code };
       }),
     );
@@ -852,6 +904,7 @@ export class AuditEngine {
 
   setSetting(key: string, value: string | null): Promise<void> {
     return this.enqueue(async () => {
+      if (!/^(sync:|backup:|operator$)/.test(key)) await this.audit("setting", key, value ? String(value).slice(0, 80) : "(مسح)");
       await this.db.run("INSERT OR REPLACE INTO app_state (key, value) VALUES (?, ?)", [`setting:${key}`, value]);
     });
   }
@@ -867,7 +920,7 @@ export class AuditEngine {
       folder: await this.readSetting("pdf_folder"),
       invoicePrinter: await this.readSetting("printer_invoice"),
       labelPrinter: await this.readSetting("printer_label"),
-      operator: await this.readSetting("operator"),
+      operator: await this.operatorName(),
     };
   }
 
@@ -1064,5 +1117,213 @@ export class AuditEngine {
       pareto,
       oldestPostedAt: posted?.at ?? null,
     };
+  }
+
+  /* ------------------- المشغّلون والتدقيق والنسخ الاحتياطي ------------------- */
+
+  private session: Session | null = null;
+  private readonly listeners = new Set<() => void>();
+  private readonly failures = new Map<string, { count: number; until: number }>();
+
+  subscribeSession(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  getSession(): Session | null {
+    return this.session;
+  }
+
+  private setSession(next: Session | null) {
+    this.session = next;
+    this.listeners.forEach((listener) => listener());
+  }
+
+  private async operatorName(): Promise<string | null> {
+    return this.session?.name ?? (await this.readSetting("operator"));
+  }
+
+  private async countOperators(): Promise<number> {
+    const [row] = await this.db.all<{ n: number }>("SELECT COUNT(*) AS n FROM operators WHERE active = 1");
+    return row?.n ?? 0;
+  }
+
+  /** عند وجود مشغّلين: لا عملية بلا تسجيل دخول؛ وبعضها للمشرف فقط. (بلا مشغّلين = وضع قديم بلا قيود.) */
+  private async requireSession(role?: Role): Promise<void> {
+    if ((await this.countOperators()) === 0) return;
+    if (!this.session) throw new Error("سجّل الدخول أولاً.");
+    if (role === "supervisor" && this.session.role !== "supervisor") throw new Error("هذه العملية للمشرف فقط.");
+  }
+
+  private async audit(event: string, ref: string | null = null, detail: string | null = null, operator?: string | null): Promise<void> {
+    await this.db.run("INSERT INTO audit_log (at, operator, event, ref, detail) VALUES (?, ?, ?, ?, ?)", [
+      this.now(),
+      operator === undefined ? this.session?.name ?? (await this.readSetting("operator")) : operator,
+      event,
+      ref,
+      detail,
+    ]);
+  }
+
+  /** سجل حدث من خارج المحرك (مثل نسخ احتياطي ناجح أو فاشل). */
+  recordEvent(event: string, ref: string | null, detail: string | null): Promise<void> {
+    return this.enqueue(() => this.audit(event, ref, detail));
+  }
+
+  /** أسماء المشغّلين النشطين لشاشة الدخول (بلا أي بيانات سرية). */
+  loginNames(): Promise<string[]> {
+    return this.enqueue(async () => (await this.db.all<{ name: string }>("SELECT name FROM operators WHERE active = 1 ORDER BY name")).map((r) => r.name));
+  }
+
+  needsSetup(): Promise<boolean> {
+    return this.enqueue(async () => (await this.countOperators()) === 0);
+  }
+
+  async hasOperators(): Promise<boolean> {
+    return !(await this.needsSetup());
+  }
+
+  createOperator(name: string, pin: string, role: Role = "operator"): Promise<Session> {
+    return this.enqueue(() =>
+      this.tx(async () => {
+        const clean = name.trim();
+        if (clean.length < 2) throw new Error("اسم المشغّل قصير جداً.");
+        if (!/^\d{4,8}$/.test(pin)) throw new Error("رمز PIN من 4 إلى 8 أرقام.");
+        const first = (await this.countOperators()) === 0;
+        if (!first) await this.requireSession("supervisor");
+        const [dup] = await this.db.all<{ id: number }>("SELECT id FROM operators WHERE name = ?", [clean]);
+        if (dup) throw new Error("يوجد مشغّل بهذا الاسم.");
+        const salt = randomSalt();
+        const finalRole: Role = first ? "supervisor" : role;
+        const res = await this.db.run("INSERT INTO operators (name, salt, pin_hash, role, active, created_at) VALUES (?, ?, ?, ?, 1, ?)", [clean, salt, hashPin(pin, salt), finalRole, this.now()]);
+        const created: Session = { id: res.lastId, name: clean, role: finalRole };
+        await this.audit(first ? "setup" : "operator_add", clean, finalRole, first ? clean : undefined);
+        if (first) this.setSession(created);
+        return created;
+      }),
+    );
+  }
+
+  login(name: string, pin: string): Promise<{ ok: true; session: Session } | { ok: false; reason: string }> {
+    return this.enqueue(async () => {
+      const key = name.trim().toLowerCase();
+      const fail = this.failures.get(key);
+      if (fail && fail.until > Date.now()) {
+        return { ok: false as const, reason: `محاولات كثيرة خاطئة. انتظر ${Math.ceil((fail.until - Date.now()) / 1000)} ثانية.` };
+      }
+      const [row] = await this.db.all<{ id: number; name: string; salt: string; pin_hash: string; role: Role; active: number }>(
+        "SELECT * FROM operators WHERE name = ? COLLATE NOCASE",
+        [name.trim()],
+      );
+      if (!row || !row.active || hashPin(pin, row.salt) !== row.pin_hash) {
+        const count = (fail?.count ?? 0) + 1;
+        this.failures.set(key, { count, until: count >= 5 ? Date.now() + 60_000 : 0 });
+        await this.audit("login_failed", name.trim(), `محاولة ${count}`, name.trim());
+        return { ok: false as const, reason: count >= 5 ? "تم القفل لمدة دقيقة بعد 5 محاولات خاطئة." : "الاسم أو الرمز غير صحيح." };
+      }
+      this.failures.delete(key);
+      const session: Session = { id: row.id, name: row.name, role: row.role };
+      this.setSession(session);
+      await this.audit("login", row.name, row.role);
+      return { ok: true as const, session };
+    });
+  }
+
+  logout(): Promise<void> {
+    return this.enqueue(async () => {
+      if (this.session) await this.audit("logout", this.session.name);
+      this.setSession(null);
+    });
+  }
+
+  listOperators(): Promise<OperatorRow[]> {
+    return this.enqueue(async () => {
+      await this.requireSession("supervisor");
+      return this.db.all<OperatorRow>("SELECT id, name, role, active FROM operators ORDER BY id");
+    });
+  }
+
+  setOperatorActive(id: number, active: boolean): Promise<void> {
+    return this.enqueue(() =>
+      this.tx(async () => {
+        await this.requireSession("supervisor");
+        const [target] = await this.db.all<OperatorRow>("SELECT id, name, role, active FROM operators WHERE id = ?", [id]);
+        if (!target) throw new Error("المشغّل غير موجود.");
+        if (!active) {
+          if (this.session?.id === id) throw new Error("لا يمكنك تعطيل حسابك الحالي.");
+          if (target.role === "supervisor") {
+            const [others] = await this.db.all<{ n: number }>("SELECT COUNT(*) AS n FROM operators WHERE role = 'supervisor' AND active = 1 AND id <> ?", [id]);
+            if (!others || others.n === 0) throw new Error("يجب بقاء مشرف واحد نشط على الأقل.");
+          }
+        }
+        await this.db.run("UPDATE operators SET active = ? WHERE id = ?", [active ? 1 : 0, id]);
+        await this.audit(active ? "operator_enable" : "operator_disable", target.name);
+      }),
+    );
+  }
+
+  resetPin(id: number, pin: string): Promise<void> {
+    return this.enqueue(() =>
+      this.tx(async () => {
+        await this.requireSession("supervisor");
+        if (!/^\d{4,8}$/.test(pin)) throw new Error("رمز PIN من 4 إلى 8 أرقام.");
+        const [target] = await this.db.all<OperatorRow>("SELECT id, name, role, active FROM operators WHERE id = ?", [id]);
+        if (!target) throw new Error("المشغّل غير موجود.");
+        const salt = randomSalt();
+        await this.db.run("UPDATE operators SET salt = ?, pin_hash = ? WHERE id = ?", [salt, hashPin(pin, salt), id]);
+        await this.audit("pin_reset", target.name);
+      }),
+    );
+  }
+
+  auditLog(limit = 200): Promise<AuditRow[]> {
+    return this.enqueue(async () => {
+      await this.requireSession("supervisor");
+      return this.db.all<AuditRow>("SELECT id, at, operator, event, ref, detail FROM audit_log ORDER BY id DESC LIMIT ?", [limit]);
+    });
+  }
+
+  /** لقطة كاملة لبيانات التدقيق (لا تتضمن حسابات المشغّلين ولا رموزهم). */
+  exportSnapshot(): Promise<Snapshot> {
+    return this.enqueue(async () => {
+      await this.requireSession();
+      const tables: Snapshot["tables"] = {};
+      for (const name of SNAPSHOT_TABLES) {
+        const rows = await this.db.all<Record<string, SqlValue>>(`SELECT * FROM ${name}`);
+        const columns = rows.length > 0 ? Object.keys(rows[0]) : (await this.db.all<{ name: string }>(`PRAGMA table_info(${name})`)).map((c) => c.name);
+        tables[name] = { columns, rows: rows.map((row) => columns.map((c) => row[c] ?? null)) };
+      }
+      return { app: "marsood", format: 1, createdAt: this.now(), tables };
+    });
+  }
+
+  /** يستبدل بيانات التدقيق بلقطة سابقة (للمشرف). سجل التدقيق وحسابات المشغّلين لا تُمس. */
+  restoreSnapshot(snapshot: Snapshot): Promise<{ tables: number; rows: number }> {
+    return this.enqueue(() =>
+      this.tx(async () => {
+        await this.requireSession("supervisor");
+        if (snapshot?.app !== "marsood" || snapshot.format !== 1 || typeof snapshot.tables !== "object") throw new Error("الملف ليس نسخة احتياطية صالحة لمِرصاد.");
+        for (const name of SNAPSHOT_TABLES) {
+          const t = snapshot.tables[name];
+          if (!t || !Array.isArray(t.columns) || !Array.isArray(t.rows)) throw new Error(`النسخة ناقصة: الجدول ${name} غير موجود.`);
+          if (!t.columns.every((c) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(c))) throw new Error("أسماء أعمدة غير صالحة في النسخة.");
+        }
+        let rowsTotal = 0;
+        for (const name of SNAPSHOT_TABLES) {
+          await this.db.run(`DELETE FROM ${name}`);
+          const { columns, rows } = snapshot.tables[name];
+          if (rows.length === 0) continue;
+          const marks = `(${columns.map(() => "?").join(",")})`;
+          const per = Math.max(1, Math.floor(900 / columns.length));
+          for (let i = 0; i < rows.length; i += per) {
+            const chunk = rows.slice(i, i + per);
+            await this.db.run(`INSERT INTO ${name} (${columns.join(",")}) VALUES ${chunk.map(() => marks).join(",")}`, chunk.flat() as SqlValue[]);
+          }
+          rowsTotal += rows.length;
+        }
+        await this.audit("restore", snapshot.createdAt, `${rowsTotal} صف`);
+        return { tables: SNAPSHOT_TABLES.length, rows: rowsTotal };
+      }),
+    );
   }
 }

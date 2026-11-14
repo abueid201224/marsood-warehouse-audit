@@ -1,4 +1,8 @@
+import { useEffect, useState } from "react";
 import { Tabs } from "expo-router";
+import { LoginGate } from "@/components/LoginGate";
+import { useEngine } from "@/lib/core/hooks";
+import { backupQuietly } from "@/lib/backup/files";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useLayout } from "@/lib/layout";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
@@ -9,6 +13,19 @@ export default function TabLayout() {
   const { isWide } = useLayout();
   // الارتفاع يُحسب من حافة النظام السفلية (شريط الإيماءات/الأزرار) فلا تتداخل الأزرار مع التبويبات
   const bottom = Math.max(insets.bottom, 8);
+  const { engine } = useEngine();
+  const [signedIn, setSignedIn] = useState(false);
+  useEffect(() => {
+    if (!engine) return;
+    const sync = () => setSignedIn(engine.getSession() !== null);
+    sync();
+    return engine.subscribeSession(sync);
+  }, [engine]);
+  useEffect(() => {
+    if (engine && signedIn) backupQuietly(engine, "start");
+  }, [engine, signedIn]);
+  if (!engine) return null;
+  if (!signedIn) return <LoginGate engine={engine} />;
   return (
     <Tabs
       screenOptions={{

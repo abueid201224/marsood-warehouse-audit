@@ -21,6 +21,7 @@ export default function RootLayout() {
         <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: palette.background } }}>
           <Stack.Screen name="(tabs)" />
           <Stack.Screen name="import" />
+          <Stack.Screen name="audit" />
         </Stack>
       </SafeAreaProvider>
     </GestureHandlerRootView>
