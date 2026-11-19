@@ -15,6 +15,7 @@ import { FIELD_LABELS, FIELD_ORDER, inspectWorkbook, mapRows, type ColumnMap, ty
 import { palette } from "@/lib/palette";
 import { SourceSheet } from "@/components/SourceSheet";
 import { ensureStorageAccess } from "@/lib/access";
+import { exportImportErrors } from "@/lib/export/files";
 import { SYNC_FOLDER_KEY, SYNC_PROCESSED_KEY, listSyncFiles, pickSyncFolder } from "@/lib/sync/folder";
 import { addProcessed, parseProcessed, pickNewestUnprocessed, syncSignature, type SyncFile } from "@/lib/sync/select";
 
@@ -169,7 +170,7 @@ export default function ImportScreen() {
       const asset = picked.assets[0];
       const ext = asset.name.split(".").pop()?.toLowerCase() ?? "";
       const mime = (asset.mimeType ?? "").toLowerCase();
-      const known = ["xlsx", "xls", "csv", "txt"].includes(ext) || /spreadsheet|excel|csv|text\/plain/.test(mime);
+      const known = ["xlsx", "xls", "csv", "txt", "tsv", "json"].includes(ext) || /spreadsheet|excel|csv|text\/plain|json/.test(mime);
       // ملفات Drive/OneDrive قد تصل بلا امتداد أو بنوع عام: نحكم بمحتوى الملف لا باسمه
       const rejected = ["pdf", "jpg", "jpeg", "png", "doc", "docx", "zip"].includes(ext) && !known;
       if (rejected) {
@@ -206,6 +207,16 @@ export default function ImportScreen() {
     setBytes(data);
     setPreview(next);
     setMap(next.columnMap);
+  }
+
+  async function saveErrors(errors: Array<{ sourceRow: number; message: string }>) {
+    if (!engine) return;
+    try {
+      const name = await exportImportErrors(engine, errors, fileName ?? "");
+      setStatus(`حُفظ الملف ${name}.`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "تعذر حفظ الملف.");
+    }
   }
 
   async function chooseSyncFolder() {
@@ -421,6 +432,7 @@ export default function ImportScreen() {
                   <Text style={styles.errorsTitle}>أسطر مستبعدة ({parsed.errors.length})</Text>
                   {parsed.errors.slice(0, 8).map((row) => <Text key={`${row.sourceRow}-${row.message}`} style={styles.errorLine}>صف {row.sourceRow}: {row.message}</Text>)}
                   {parsed.errors.length > 8 ? <Text style={styles.errorLine}>و{parsed.errors.length - 8} أسطر أخرى…</Text> : null}
+                  <ActionButton testID="export-errors" title="حفظ قائمة الأسطر المستبعدة (CSV)" icon="file-delimited-outline" solid={false} onPress={() => void saveErrors(parsed.errors)} />
                 </View>
               ) : null}
               <Button title={busy ? "جارٍ الحفظ…" : `استيراد ${parsed.rows.length} سطر`} icon="database-import-outline" onPress={doImport} disabled={busy || !engine || parsed.rows.length === 0 || missingRequired.length > 0} />

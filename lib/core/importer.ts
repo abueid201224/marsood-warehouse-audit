@@ -143,16 +143,48 @@ export function inspectGrid(
 }
 
 /** يقرأ ملف Excel/CSV؛ تُمرَّر مكتبة xlsx حتى لا تُحمَّل في الاختبارات التي لا تحتاجها. */
+/** يفك ترميز نص الملف: UTF-8 (مع/بدون BOM) أو UTF-16 LE/BE (تصدير «Unicode Text» من Excel). */
+export function decodeText(bytes: Uint8Array): string {
+  if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) return new TextDecoder("utf-16le").decode(bytes.subarray(2));
+  if (bytes.length >= 2 && bytes[0] === 0xfe && bytes[1] === 0xff) return new TextDecoder("utf-16be").decode(bytes.subarray(2));
+  return new TextDecoder("utf-8").decode(bytes).replace(/^\uFEFF/, "");
+}
+
+const JSON_ROW_KEYS = ["rows", "items", "lines", "data", "records", "invoices", "الأسطر", "البيانات"];
+
+/** يحوّل JSON (مصفوفة كائنات/مصفوفات أو كائناً يحوي مصفوفة) إلى شبكة صفوف بعناوين، لتمر بنفس مطابقة الأعمدة. */
+export function jsonToGrid(text: string): unknown[][] {
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    throw new Error("ملف JSON تالف أو غير صالح.");
+  }
+  if (value && !Array.isArray(value) && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    const key = JSON_ROW_KEYS.find((k) => Array.isArray(record[k]));
+    if (!key) throw new Error("لم أجد مصفوفة الأسطر في JSON (المفاتيح المقبولة: rows أو items أو lines أو data).");
+    value = record[key];
+  }
+  if (!Array.isArray(value) || value.length === 0) throw new Error("ملف JSON لا يحتوي أسطراً.");
+  if (value.every((row) => Array.isArray(row))) return value as unknown[][];
+  if (!value.every((row) => row && typeof row === "object" && !Array.isArray(row))) throw new Error("كل عنصر في JSON يجب أن يكون كائناً (عنوان: قيمة) أو مصفوفة.");
+  const headers: string[] = [];
+  for (const row of value as Array<Record<string, unknown>>) for (const k of Object.keys(row)) if (!headers.includes(k)) headers.push(k);
+  return [headers, ...(value as Array<Record<string, unknown>>).map((row) => headers.map((h) => (row[h] ?? "") as unknown))];
+}
+
 export function inspectWorkbook(
   XLSX: typeof import("xlsx"),
   bytes: Uint8Array,
   fileName: string,
   sheetIndex = 0,
 ): SheetPreview {
-  const isCsv = /\.(csv|txt)$/i.test(fileName);
-  // CSV يُقرأ كنص UTF-8 صريحاً (حتى لا تتلف الحروف العربية) وraw يحفظ الأصفار البادئة في الأكواد
+  if (/\.json$/i.test(fileName)) return inspectGrid(jsonToGrid(decodeText(bytes)), fileName);
+  const isCsv = /\.(csv|txt|tsv)$/i.test(fileName);
+  // CSV يُقرأ كنص صريحاً (حتى لا تتلف الحروف العربية) وraw يحفظ الأصفار البادئة في الأكواد
   const workbook = isCsv
-    ? XLSX.read(new TextDecoder("utf-8").decode(bytes).replace(/^﻿/, ""), { type: "string", raw: true })
+    ? XLSX.read(decodeText(bytes), { type: "string", raw: true })
     : XLSX.read(bytes, { type: "array", cellDates: false, raw: true });
   if (workbook.SheetNames.length === 0) throw new Error("لا يحتوي الملف على أوراق عمل.");
   const safeIndex = Math.max(0, Math.min(sheetIndex, workbook.SheetNames.length - 1));

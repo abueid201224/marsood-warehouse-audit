@@ -6,8 +6,9 @@ import { Button, Card, EmptyState, Header, Metric, Notice, Screen, SectionTitle 
 import type { ErrorReport } from "@/lib/core/engine";
 import { formatDateTime } from "@/lib/core/format";
 import { useEngine } from "@/lib/core/hooks";
-import { buildReportHtml, reportToCsv, reportToText } from "@/lib/core/report";
+import { buildReportHtml, reportToText } from "@/lib/core/report";
 import { PRINT_KIND_LABELS, PRINT_STATUS_LABELS } from "@/lib/core/format";
+import { exportLabel, exportReport, pickExportFolder, type ExportKind } from "@/lib/export/files";
 import { palette } from "@/lib/palette";
 
 export default function ReportScreen() {
@@ -35,9 +36,31 @@ export default function ReportScreen() {
     await Share.share({ message: reportToText(report) }).catch(() => undefined);
   }
 
-  async function shareCsv() {
-    if (!report) return;
-    await Share.share({ message: reportToCsv(report), title: "marsood-report.csv" }).catch(() => undefined);
+  const [exporting, setExporting] = useState(false);
+  const [saved, setSaved] = useState("");
+
+  async function save(kind: ExportKind) {
+    if (!engine || exporting) return;
+    setExporting(true);
+    setSaved("");
+    setMessage("");
+    try {
+      const result = await exportReport(engine, kind);
+      setSaved(`حُفظ ملف ${exportLabel(kind)} «${result.name}» في ${result.folderLabel}.`);
+    } catch (cause) {
+      setMessage(`تعذر الحفظ: ${cause instanceof Error ? cause.message : "خطأ غير معروف"}`);
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  async function changeFolder() {
+    if (!engine) return;
+    try {
+      if (await pickExportFolder(engine)) setSaved("حُدد مجلد التصدير الجديد.");
+    } catch (cause) {
+      setMessage(cause instanceof Error ? cause.message : "تعذر اختيار المجلد.");
+    }
   }
 
   const wrongTotal = report?.wrong.reduce((sum, row) => sum + row.count, 0) ?? 0;
@@ -48,6 +71,7 @@ export default function ReportScreen() {
     <Screen>
       <Header title="تقرير الأخطاء" subtitle={report ? `حتى ${formatDateTime(report.generatedAt)}` : "أخطاء المسح والنواقص"} />
       {error || message ? <Notice title="يلزم الانتباه" body={error || message} tone="danger" /> : null}
+      {saved ? <Notice title="تم الحفظ" body={saved} tone="success" /> : null}
       {report ? (
         <>
           <View style={styles.metrics}>
@@ -58,7 +82,11 @@ export default function ReportScreen() {
           <View style={styles.actions}>
             <View style={styles.action}><Button title="طباعة التقرير" icon="printer-outline" onPress={print} /></View>
             <View style={styles.action}><Button title="مشاركة كنص" icon="share-variant-outline" variant="outline" onPress={share} /></View>
-            <View style={styles.action}><Button title="مشاركة CSV" icon="file-delimited-outline" variant="outline" onPress={shareCsv} /></View>
+            <View style={styles.action}><Button title="حفظ Excel" icon="file-excel-outline" variant="outline" onPress={() => void save("xlsx")} disabled={exporting} /></View>
+            <View style={styles.action}><Button title="حفظ PDF" icon="file-pdf-box" variant="outline" onPress={() => void save("pdf")} disabled={exporting} /></View>
+            <View style={styles.action}><Button title="حفظ CSV (الأخطاء)" icon="file-delimited-outline" variant="outline" onPress={() => void save("csv")} disabled={exporting} /></View>
+            <View style={styles.action}><Button title="حفظ CSV (الفواتير)" icon="file-delimited-outline" variant="outline" onPress={() => void save("invoices-csv")} disabled={exporting} /></View>
+            <View style={styles.action}><Button title="مجلد الحفظ" icon="folder-cog-outline" variant="outline" onPress={() => void changeFolder()} disabled={exporting} /></View>
             <View style={styles.action}><Button title="تحديث" icon="refresh" variant="outline" onPress={load} /></View>
           </View>
           {empty ? <Card><EmptyState icon="check-decagram-outline" title="لا توجد أخطاء" body="لم تُسجَّل أخطاء تجهيز أو تجهيز زائد أو نواقص حتى الآن." /></Card> : null}
