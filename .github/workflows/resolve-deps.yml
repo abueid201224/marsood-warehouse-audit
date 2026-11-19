@@ -1,0 +1,30 @@
+name: Resolve Expo dependency (one-off)
+on:
+  workflow_dispatch:
+    inputs:
+      packages:
+        description: "حزم expo لتثبيتها بإصدار متوافق مع SDK (مفصولة بمسافة)"
+        required: true
+        default: "expo-camera"
+permissions:
+  contents: write
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --no-frozen-lockfile
+      - name: expo install (يختار الإصدار المتوافق مع SDK)
+        run: pnpm exec expo install ${{ github.event.inputs.packages }}
+      - name: Commit package.json + lockfile
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@users.noreply.github.com"
+          git add package.json pnpm-lock.yaml
+          git diff --cached --quiet || git commit -m "chore: add ${{ github.event.inputs.packages }} via expo install [skip ci]"
+          git push
