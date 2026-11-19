@@ -40,7 +40,7 @@ const env = {
 const config: ExpoConfig = {
   name: env.appName,
   slug: env.appSlug,
-  version: "1.9.0",
+  version: "1.10.0",
   orientation: "default",
   icon: "./assets/images/icon.png",
   scheme: env.scheme,
@@ -61,7 +61,7 @@ const config: ExpoConfig = {
     },
     predictiveBackGestureEnabled: false,
     package: env.androidPackage,
-    versionCode: 13,
+    versionCode: 14,
     permissions: ["android.permission.INTERNET", "android.permission.READ_EXTERNAL_STORAGE"], // للطباعة الصامتة إلى الطابعات في الشبكة المحلية فقط
     blockedPermissions: [
       "android.permission.POST_NOTIFICATIONS",
@@ -82,6 +82,7 @@ const config: ExpoConfig = {
     "expo-asset",
     "expo-router",
     "expo-sqlite",
+    ["expo-camera", { cameraPermission: "يستخدم مِرصاد الكاميرا لمسح الباركود فقط، ولا تُحفظ الصور ولا تغادر الجهاز.", recordAudioAndroid: false }],
     [
       "expo-splash-screen",
       {

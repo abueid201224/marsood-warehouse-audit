@@ -6,6 +6,7 @@ import * as Haptics from "expo-haptics";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { backupQuietly } from "@/lib/backup/files";
 import { Button, Card, EmptyState, Header, Metric, Notice, ProgressBar, Screen, SectionTitle, StatusBadge } from "@/components/MarsoodUI";
+import { CameraScanner } from "@/components/CameraScanner";
 import { PrintAlert } from "@/components/PrintAlert";
 import { ScannerInput } from "@/components/ScannerInput";
 import { ItemsTable, type ErrorCode } from "@/components/ItemsTable";
@@ -102,6 +103,7 @@ export default function ScanScreen() {
   const [focused, setFocused] = useState(false);
   const [view, setView] = useState<View_ | null>(null);
   const [recent, setRecent] = useState<Recent>([]);
+  const [camera, setCamera] = useState(false);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [busy, setBusy] = useState(false);
   const [printEnabled, setPrintEnabled] = useState(true);
@@ -262,7 +264,17 @@ export default function ScanScreen() {
     <Screen>
       <Header title="المسح" subtitle="امسح رقم الطلب من البوليصة ثم أصناف الفاتورة" />
       {error ? <Notice title="تعذر فتح قاعدة البيانات" body={error} tone="danger" /> : null}
-      <ScannerInput onScan={onScan} disabled={!focused || !engine} />
+      <View style={styles.modeRow}>
+        <Pressable onPress={() => setCamera(false)} style={[styles.mode, !camera && styles.modeOn]} accessibilityRole="button">
+          <MaterialCommunityIcons name="barcode-scan" size={18} color={!camera ? "#FFFFFF" : palette.tealDeep} />
+          <Text style={[styles.modeText, !camera && { color: "#FFFFFF" }]}>قارئ الباركود</Text>
+        </Pressable>
+        <Pressable testID="mode-camera" onPress={() => setCamera(true)} style={[styles.mode, camera && styles.modeOn]} accessibilityRole="button">
+          <MaterialCommunityIcons name="camera-outline" size={18} color={camera ? "#FFFFFF" : palette.tealDeep} />
+          <Text style={[styles.modeText, camera && { color: "#FFFFFF" }]}>الكاميرا</Text>
+        </Pressable>
+      </View>
+      {camera ? <CameraScanner onScan={onScan} active={focused && !!engine} /> : <ScannerInput onScan={onScan} disabled={!focused || !engine} />}
       <PrintAlert engine={engine} />
       <View style={styles.printBar}>
         <Switch value={printEnabled} onValueChange={togglePrint} trackColor={{ true: palette.teal, false: palette.line }} accessibilityLabel="الطباعة التلقائية" />
@@ -437,6 +449,10 @@ const styles = StyleSheet.create({
   panes: { flexDirection: "row", gap: 16, alignItems: "flex-start" },
   paneSide: { flex: 2, gap: 16, minWidth: 0 },
   paneMain: { flex: 3, gap: 16, minWidth: 0 },
+  modeRow: { flexDirection: "row", gap: 8 },
+  mode: { flex: 1, minHeight: 42, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, borderRadius: 12, borderWidth: 1, borderColor: palette.tealDeep, backgroundColor: "#FFFFFF" },
+  modeOn: { backgroundColor: palette.tealDeep },
+  modeText: { color: palette.tealDeep, fontWeight: "800", fontSize: 14 },
   printBar: { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 4 },
   printText: { flex: 1, fontSize: 13, fontWeight: "800", textAlign: "right" },
   printRow: { color: palette.inkSoft, fontSize: 12, textAlign: "right" },
