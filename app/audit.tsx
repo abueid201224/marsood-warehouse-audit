@@ -9,7 +9,7 @@ import { palette } from "@/lib/palette";
 const LABELS: Record<string, string> = {
   setup: "إعداد المشرف", login: "دخول", logout: "خروج", login_failed: "دخول فاشل", operator_add: "إضافة مشغّل", operator_disable: "تعطيل مشغّل", operator_enable: "تفعيل مشغّل", pin_reset: "إعادة رمز",
   import: "استيراد", open: "فتح فاتورة", reopen: "إعادة فتح", close: "إنهاء فاتورة", post: "ترحيل فاتورة", release: "ترك فاتورة", adjust: "تعديل كمية", undo: "إلغاء مسحة",
-  setting: "تغيير إعداد", export: "تصدير ملف", backup: "نسخ احتياطي", backup_failed: "فشل النسخ", restore: "استعادة", reset: "مسح البيانات",
+  setting: "تغيير إعداد", export: "تصدير ملف", diag_clear: "مسح سجل الأعطال", backup: "نسخ احتياطي", backup_failed: "فشل النسخ", restore: "استعادة", reset: "مسح البيانات",
 };
 
 export default function AuditScreen() {

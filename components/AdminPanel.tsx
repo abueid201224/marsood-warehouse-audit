@@ -125,6 +125,11 @@ export function AdminPanel({ engine, session }: { engine: AuditEngine; session: 
           </Card>
 
           <Card>
+            <SectionTitle title="سجل الأعطال" hint="أخطاء التطبيق غير المتوقعة محفوظة محلياً للتشخيص" />
+            <Button title="عرض سجل الأعطال" icon="bug-outline" variant="outline" onPress={() => router.push("/diagnostics")} />
+          </Card>
+
+          <Card>
             <SectionTitle title="سجل التدقيق" hint="كل الإجراءات باسم المشغّل — للإضافة فقط ولا يمكن تعديله" />
             <Button title="عرض السجل" icon="clipboard-text-clock-outline" variant="outline" onPress={() => router.push("/audit")} />
           </Card>

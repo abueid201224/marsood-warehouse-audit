@@ -88,3 +88,14 @@ export async function exportImportErrors(engine: AuditEngine, errors: Array<{ so
   await engine.recordEvent("export", `${base}.csv`, "أخطاء الاستيراد");
   return `${base}.csv`;
 }
+
+/** يحفظ نصاً عادياً (.txt) في مجلد التصدير. */
+export async function saveTextFile(engine: AuditEngine, prefix: string, text: string): Promise<string> {
+  const folder = await resolveExportFolder(engine);
+  if (!folder) throw new Error("لم يُختر مجلد للحفظ.");
+  const base = `${prefix}-${stamp()}`;
+  const uri = await FS.StorageAccessFramework.createFileAsync(folder, base, "text/plain");
+  await FS.writeAsStringAsync(uri, text);
+  await engine.recordEvent("export", `${base}.txt`, "سجل الأعطال");
+  return `${base}.txt`;
+}

@@ -272,6 +272,13 @@ CREATE TABLE IF NOT EXISTS audit_log (
   detail TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_audit_at ON audit_log(at);
+CREATE TABLE IF NOT EXISTS diag_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  at TEXT NOT NULL,
+  source TEXT NOT NULL,
+  message TEXT NOT NULL,
+  stack TEXT
+);
 CREATE TRIGGER IF NOT EXISTS audit_no_update BEFORE UPDATE ON audit_log BEGIN SELECT RAISE(ABORT, 'audit log is append-only'); END;
 CREATE TRIGGER IF NOT EXISTS audit_no_delete BEFORE DELETE ON audit_log BEGIN SELECT RAISE(ABORT, 'audit log is append-only'); END;
 CREATE TABLE IF NOT EXISTS print_files (
@@ -368,6 +375,8 @@ function toView(row: InvoiceRow): InvoiceView {
 export type Role = "supervisor" | "operator";
 export interface Session { id: number; name: string; role: Role }
 export interface OperatorRow { id: number; name: string; role: Role; active: number }
+export interface DiagRow { id: number; at: string; source: string; message: string; stack: string | null }
+export const DIAG_KEEP = 300;
 export interface AuditRow { id: number; at: string; operator: string | null; event: string; ref: string | null; detail: string | null }
 /** الجداول التي تُنسخ احتياطياً وتُستعاد (الإعدادات، البيانات، الطباعة). */
 export const SNAPSHOT_TABLES = ["imports", "lines", "invoice_state", "scans", "app_state", "print_files", "print_jobs"] as const;
@@ -1352,6 +1361,33 @@ export class AuditEngine {
         await this.audit("pin_reset", target.name);
       }),
     );
+  }
+
+  /** يسجل عطلاً/خطأ غير متوقع محلياً (بلا إنترنت) مع الاحتفاظ بآخر DIAG_KEEP سجل. لا يرمي أبداً. */
+  logDiag(source: string, message: string, stack?: string | null): Promise<void> {
+    return this.enqueue(async () => {
+      try {
+        await this.db.run("INSERT INTO diag_log (at, source, message, stack) VALUES (?, ?, ?, ?)", [this.now(), source.slice(0, 40), message.slice(0, 500), stack ? stack.slice(0, 4000) : null]);
+        await this.db.run("DELETE FROM diag_log WHERE id <= (SELECT MAX(id) FROM diag_log) - ?", [DIAG_KEEP]);
+      } catch {
+        // التشخيص لا يجوز أن يتسبب بعطل
+      }
+    });
+  }
+
+  diagLog(limit = 200): Promise<DiagRow[]> {
+    return this.enqueue(async () => {
+      await this.requireSession("supervisor");
+      return this.db.all<DiagRow>("SELECT id, at, source, message, stack FROM diag_log ORDER BY id DESC LIMIT ?", [limit]);
+    });
+  }
+
+  clearDiag(): Promise<void> {
+    return this.enqueue(async () => {
+      await this.requireSession("supervisor");
+      await this.db.run("DELETE FROM diag_log");
+      await this.audit("diag_clear");
+    });
   }
 
   auditLog(limit = 200): Promise<AuditRow[]> {

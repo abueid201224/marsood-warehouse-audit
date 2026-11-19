@@ -171,3 +171,25 @@ describe("إنتاجية المشغّلين", () => {
     await expect(e.operatorStats(null)).rejects.toThrow("للمشرف");
   });
 });
+
+describe("سجل الأعطال المحلي", () => {
+  it("يُسجَّل ويُقتطع، ويقرؤه المشرف فقط، ولا يرمي أبداً", async () => {
+    const e = await makeEngine();
+    await e.createOperator("مشرف", "1234");
+    await e.createOperator("عامل", "5678", "operator");
+    for (let i = 0; i < 305; i++) await e.logDiag("js", `خطأ ${i}`, "stack");
+    const log = await e.diagLog(1000);
+    expect(log).toHaveLength(300);
+    expect(log[0].message).toBe("خطأ 304");
+    await e.logDiag("x", "y".repeat(2000), null);
+    expect((await e.diagLog(1))[0].message).toHaveLength(500);
+    await e.logout();
+    await e.login("عامل", "5678");
+    await expect(e.diagLog()).rejects.toThrow("للمشرف");
+    await e.logDiag("js", "من مشغّل"); // يعمل بلا صلاحية
+    await e.logout();
+    await e.login("مشرف", "1234");
+    await e.clearDiag();
+    expect(await e.diagLog()).toHaveLength(0);
+  });
+});
