@@ -6,7 +6,7 @@ import { ScannerInput } from "@/components/ScannerInput";
 import type { CountLine, CountMode, CountTotal } from "@/lib/core/engine";
 import { codeKey } from "@/lib/core/codes";
 import { useEngine } from "@/lib/core/hooks";
-import { breakdown, compose, describeComposite, findRule, fromPieces, loadRules, parseScope, type PackRule, type PackScope } from "@/lib/core/packaging";
+import { asUnit, breakdown, compose, describeComposite, findRule, fromPieces, loadRules, parseScope, type PackRule, type PackScope } from "@/lib/core/packaging";
 import { saveTextFile } from "@/lib/export/files";
 import { palette } from "@/lib/palette";
 
@@ -96,7 +96,7 @@ export default function CountScreen() {
       const head = "الصنف,إجمالي الحبات,التفصيل,الوحدة الرئيسية,الكمية بالوحدة الرئيسية";
       const body = totals.map((t) => {
         const r = findRule(t.item_code, rules, scope);
-        const unit = r?.mainUnit ?? t.main_unit;
+        const unit = r?.mainUnit ?? asUnit(t.main_unit);
         return [t.item_code, t.pieces, r ? describeComposite(breakdown(t.pieces, r)) : `${t.pieces} حبة`, unit, fromPieces(t.pieces, unit, r)].join(",");
       });
       const name = await saveTextFile(engine, mode === "receive" ? "marsood-receiving" : "marsood-stocktake", `﻿${[head, ...body].join("\n")}`);
@@ -144,7 +144,7 @@ export default function CountScreen() {
         <SectionTitle title="إجمالي الأصناف" hint={`${totals.length} صنف`} />
         {totals.length === 0 ? <EmptyState icon="package-variant" title="لا توجد عمليات" body="امسح صنفاً وسجّل كميته." /> : totals.map((t) => {
           const r = findRule(t.item_code, rules, scope);
-          const unit = r?.mainUnit ?? t.main_unit;
+          const unit = r?.mainUnit ?? asUnit(t.main_unit);
           return (
             <View key={t.item_code} style={styles.tr}>
               <Text style={[styles.td, { flex: 1.2, fontWeight: "800" }]} selectable>{t.item_code}</Text>

@@ -331,3 +331,8 @@ export function parseScope(json: string | null): PackScope | null {
     return null;
   }
 }
+
+/** نص محفوظ → وحدة صالحة (EH عند عدم التعرف). */
+export function asUnit(text: string | null | undefined): Unit {
+  return (UNITS as readonly string[]).includes(String(text)) ? (text as Unit) : "EH";
+}
