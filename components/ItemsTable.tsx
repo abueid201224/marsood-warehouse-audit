@@ -3,7 +3,6 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { Card, SectionTitle, StatusBadge } from "@/components/MarsoodUI";
 import { itemState, type ItemRow } from "@/lib/core/engine";
-import { resolveLine, type PackRule } from "@/lib/core/packaging";
 import { palette } from "@/lib/palette";
 
 export type ItemFilter = "natural" | "short" | "over" | "errors";
@@ -27,14 +26,9 @@ export function filterItems(items: ItemRow[], filter: Exclude<ItemFilter, "error
   return natural;
 }
 
-const Row = memo(function Row({ item, adjustable, onAdjust, rules }: { item: ItemRow; adjustable: boolean; onAdjust: (item: ItemRow, delta: 1 | -1) => void; rules: PackRule[] }) {
+const Row = memo(function Row({ item, adjustable, onAdjust }: { item: ItemRow; adjustable: boolean; onAdjust: (item: ItemRow, delta: 1 | -1) => void }) {
   const badge = ITEM_BADGE[itemState(item)];
-  let pack = "";
-  try {
-    pack = rules.length ? resolveLine(item.item_code, item.qty, item.unit, rules)?.label ?? "" : "";
-  } catch {
-    pack = "";
-  }
+
   return (
     <View style={styles.tr}>
       <View style={{ flex: 1.15 }}><StatusBadge state={badge.state} label={badge.label} /></View>
@@ -54,15 +48,12 @@ const Row = memo(function Row({ item, adjustable, onAdjust, rules }: { item: Ite
       <Text style={[styles.td, { flex: 0.6 }]}>{item.qty}</Text>
       <Text style={[styles.td, { flex: 0.7 }]} numberOfLines={1}>{item.unit ?? "—"}</Text>
       <Text style={[styles.td, { flex: 1.3, fontWeight: "800" }]} selectable>{item.item_code}</Text>
-      <View style={{ flex: 2 }}>
-        <Text style={[styles.td, styles.desc]} numberOfLines={2}>{item.item_desc || "—"}</Text>
-        {pack ? <Text style={styles.pack}>{pack}</Text> : null}
-      </View>
+      <Text style={[styles.td, styles.desc, { flex: 2 }]} numberOfLines={2}>{item.item_desc || "—"}</Text>
     </View>
   );
 });
 
-export function ItemsTable({ items, errors, readonly, onAdjust, rules = [] }: { items: ItemRow[]; errors: ErrorCode[]; readonly: boolean; onAdjust: (item: ItemRow, delta: 1 | -1) => void; rules?: PackRule[] }) {
+export function ItemsTable({ items, errors, readonly, onAdjust }: { items: ItemRow[]; errors: ErrorCode[]; readonly: boolean; onAdjust: (item: ItemRow, delta: 1 | -1) => void }) {
   const [filter, setFilter] = useState<ItemFilter>("natural");
   const counts = useMemo(
     () => ({ natural: items.length, short: items.filter((i) => i.scanned < i.qty).length, over: items.filter((i) => i.scanned > i.qty).length, errors: errors.reduce((sum, e) => sum + e.count, 0) }),
@@ -103,7 +94,7 @@ export function ItemsTable({ items, errors, readonly, onAdjust, rules = [] }: { 
             <Text style={[styles.th, { flex: 1.3 }]}>كود الصنف</Text>
             <Text style={[styles.th, { flex: 2 }]}>بيان الصنف</Text>
           </View>
-          {rows.length === 0 ? <Text style={styles.empty}>{filter === "short" ? "لا توجد أصناف ناقصة." : "لا توجد أصناف زائدة."}</Text> : rows.map((item) => <Row key={item.item_key} item={item} adjustable={!readonly} onAdjust={onAdjust} rules={rules} />)}
+          {rows.length === 0 ? <Text style={styles.empty}>{filter === "short" ? "لا توجد أصناف ناقصة." : "لا توجد أصناف زائدة."}</Text> : rows.map((item) => <Row key={item.item_key} item={item} adjustable={!readonly} onAdjust={onAdjust} />)}
         </>
       )}
     </Card>
@@ -121,7 +112,6 @@ const styles = StyleSheet.create({
   th: { color: palette.muted, fontSize: 12, fontWeight: "800", textAlign: "right" },
   tr: { flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: palette.line },
   td: { color: palette.text, fontSize: 15, textAlign: "right" },
-  pack: { color: palette.teal, fontSize: 12, fontWeight: "800", textAlign: "right" },
   desc: { fontSize: 13, color: palette.inkSoft },
   qtyCell: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8 },
   scanned: { color: palette.ink, fontSize: 17, fontWeight: "900", minWidth: 26, textAlign: "center" },

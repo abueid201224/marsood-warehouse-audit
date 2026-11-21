@@ -15,6 +15,12 @@ export type ExtendedUnit = Unit | "BOX" | "CARTON";
 export const UNIT_PIECES: Record<Unit, number> = { EH: 1, PCS: 1, DZ: 12, HDZ: 6 };
 
 /** المدى المسموح به للعبوة (قابل للتعديل من الواجهة بحدود آمنة). */
+/**
+ * أحجام العلبة المعتمدة بالحبات: 3 و4 و5 و6، أما 12 فهي درزن كامل.
+ * ما بين 7 و11 حبة ليس علبة بل جزء من الدرزن فلا يُقبل حجماً للعلبة.
+ */
+export const BOX_SIZES: readonly number[] = [3, 4, 5, 6, 12];
+
 export const LIMITS = { cartonPiecesMin: 12, cartonPiecesMax: 72, boxesMin: 1, boxesMax: 12 } as const;
 
 /** دقة الكسور العشرية عند الصرف بالدرزن (4 أرقام). */
@@ -79,10 +85,51 @@ export function validateRule(rule: PackRule): string[] {
     errors.push(`عدد العلب يجب أن يكون بين ${LIMITS.boxesMin} و${LIMITS.boxesMax}`);
   } else if (isInt(rule.cartonPieces) && rule.cartonPieces % rule.boxesPerCarton !== 0) {
     errors.push("حبات الكرتون لا تقبل القسمة على عدد العلب");
+  } else if (isInt(rule.cartonPieces) && !BOX_SIZES.includes(rule.cartonPieces / rule.boxesPerCarton)) {
+    errors.push("حجم العلبة يجب أن يكون 3 أو 4 أو 5 أو 6 حبات، أو 12 (درزن كامل)");
   }
   if (!UNITS.includes(rule.issueUnit)) errors.push("وحدة الصرف غير معروفة");
   if (!UNITS.includes(rule.mainUnit)) errors.push("الوحدة الرئيسية غير معروفة");
   return errors;
+}
+
+/** أعداد العلب الممكنة في الكرتون لحجم علبة معيّن (يبقى الكرتون بين 12 و72 حبة). */
+export function boxCountOptions(boxPieces: number): number[] {
+  const out: number[] = [];
+  for (let b = LIMITS.boxesMin; b <= LIMITS.boxesMax; b++) {
+    const total = b * boxPieces;
+    if (total >= LIMITS.cartonPiecesMin && total <= LIMITS.cartonPiecesMax) out.push(b);
+  }
+  return out;
+}
+
+export interface NewRangeInput {
+  name: string;
+  from: number;
+  /** فارغ/غير محدد = كود واحد فقط. */
+  to?: number | null;
+  boxPieces: number;
+  boxesPerCarton: number;
+  issueUnit: Unit;
+  mainUnit: Unit;
+}
+
+/** يبني قاعدة جديدة لمدى (أو كود واحد) من حجم العلبة وعدد العلب. يرمي PackagingError إذا كانت غير صالحة. */
+export function makeRange(input: NewRangeInput, id = `r${Date.now().toString(36)}`): PackRule {
+  const rule: PackRule = {
+    id,
+    name: input.name.trim() || "مجموعة جديدة",
+    from: input.from,
+    to: input.to ?? input.from,
+    cartonPieces: input.boxPieces * input.boxesPerCarton,
+    boxesPerCarton: input.boxesPerCarton,
+    issueUnit: input.issueUnit,
+    mainUnit: input.mainUnit,
+    enabled: true,
+  };
+  const errors = validateRule(rule);
+  if (errors.length) throw new PackagingError(errors[0]);
+  return rule;
 }
 
 /** المدى المتداخل بين قاعدتين مفعّلتين (يُبلَّغ عنه ولا يُمنع؛ الأضيق مدىً يفوز). */

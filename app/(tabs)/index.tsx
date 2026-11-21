@@ -99,6 +99,7 @@ export default function DashboardScreen() {
         <View style={styles.actions}>
           <View style={styles.action}><Button title="بدء المسح" icon="barcode-scan" onPress={() => router.navigate("/scan")} disabled={!stats || stats.total === 0} /></View>
           <View style={styles.action}><Button title="استيراد ملف Excel" icon="file-upload-outline" variant="outline" onPress={() => router.push("/import")} /></View>
+          <View style={styles.action}><Button title="الاستلام والجرد" icon="package-variant-closed" variant="outline" onPress={() => router.push("/count")} /></View>
           <View style={styles.action}><Button title="بدء دفعة جديدة (مسح البيانات)" icon="delete-sweep-outline" variant="danger" onPress={confirmReset} disabled={!stats || stats.total === 0} /></View>
         </View>
       </Card>

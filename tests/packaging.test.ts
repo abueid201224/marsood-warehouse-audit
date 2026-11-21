@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  PackagingError, applyMainUnit, breakdown, compose, convert, defaultRules, describeComposite, findOverlaps, findRule, fromPieces,
+  PackagingError, BOX_SIZES, applyMainUnit, boxCountOptions, makeRange, breakdown, compose, convert, defaultRules, describeComposite, findOverlaps, findRule, fromPieces,
   parseRules, resolveLine, rulesInScope, toPieces, toScaled, validateRule, type PackRule,
 } from "../lib/core/packaging";
 
@@ -68,7 +68,7 @@ describe("PackagingEngine: العبوات والقواعد", () => {
     for (let boxes = 1; boxes <= 12; boxes++) {
       for (let perBox = 1; perBox <= 72; perBox++) {
         const cartonPieces = boxes * perBox;
-        if (cartonPieces < 12 || cartonPieces > 72) continue;
+        if (cartonPieces < 12 || cartonPieces > 72 || !BOX_SIZES.includes(perBox)) continue;
         const r: PackRule = { id: "x", name: "x", from: 1, to: 9, cartonPieces, boxesPerCarton: boxes, issueUnit: "EH", mainUnit: "EH", enabled: true };
         expect(validateRule(r)).toEqual([]);
         for (const p of [0, 1, cartonPieces - 1, cartonPieces, cartonPieces * 3 + perBox + 1, 1000]) expect(compose(breakdown(p, r), r)).toBe(p);
@@ -83,6 +83,23 @@ describe("PackagingEngine: العبوات والقواعد", () => {
     expect(validateRule({ ...rule("shemagh"), cartonPieces: 100 }).length).toBeGreaterThan(0);
     expect(validateRule({ ...rule("shemagh"), cartonPieces: 6, boxesPerCarton: 2 }).length).toBeGreaterThan(0);
     expect(validateRule({ ...rule("shemagh"), from: 10, to: 5 })).toContain("باركود البداية أكبر من النهاية");
+  });
+  it("حجم العلبة: 3/4/5/6 أو درزن 12؛ 7–11 مرفوضة (جزء من الدرزن) ولا علب 8", () => {
+    const mk = (perBox: number, boxes: number): PackRule => ({ ...rule("shemagh"), cartonPieces: perBox * boxes, boxesPerCarton: boxes });
+    for (const size of [3, 4, 5, 6, 12]) expect(validateRule(mk(size, boxCountOptions(size)[0])), String(size)).toEqual([]);
+    for (const size of [7, 8, 9, 10, 11]) expect(validateRule(mk(size, 2)).length, String(size)).toBeGreaterThan(0);
+    expect(boxCountOptions(6)).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+    expect(boxCountOptions(12)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(boxCountOptions(3)).toEqual([4, 5, 6, 7, 8, 9, 10, 11, 12]);
+  });
+  it("إضافة مدى أو كود واحد", () => {
+    const range = makeRange({ name: "بيجاما 4 درزن", from: 910378600, to: 910378700, boxPieces: 6, boxesPerCarton: 8, issueUnit: "EH", mainUnit: "EH" }, "a");
+    expect(range.cartonPieces).toBe(48);
+    expect(findRule(910378650, [range])?.id).toBe("a");
+    const single = makeRange({ name: "كود", from: 123, boxPieces: 12, boxesPerCarton: 2, issueUnit: "DZ", mainUnit: "DZ" }, "b");
+    expect([single.from, single.to, single.cartonPieces]).toEqual([123, 123, 24]);
+    expect(() => makeRange({ name: "x", from: 5, to: 1, boxPieces: 6, boxesPerCarton: 2, issueUnit: "EH", mainUnit: "EH" })).toThrow(PackagingError);
+    expect(() => makeRange({ name: "x", from: 1, boxPieces: 8, boxesPerCarton: 3, issueUnit: "EH", mainUnit: "EH" })).toThrow(PackagingError);
   });
   it("جدول الشروط الافتراضي صالح ولا تداخل فيه", () => {
     for (const r of rules) expect(validateRule(r), r.name).toEqual([]);

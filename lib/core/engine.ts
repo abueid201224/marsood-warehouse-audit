@@ -288,6 +288,21 @@ CREATE TABLE IF NOT EXISTS print_files (
   uri TEXT NOT NULL,
   PRIMARY KEY (ref_key, kind)
 );
+CREATE TABLE IF NOT EXISTS count_lines (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  mode TEXT NOT NULL,
+  item_code TEXT NOT NULL,
+  cartons INTEGER NOT NULL DEFAULT 0,
+  boxes INTEGER NOT NULL DEFAULT 0,
+  loose INTEGER NOT NULL DEFAULT 0,
+  pieces INTEGER NOT NULL,
+  main_unit TEXT NOT NULL,
+  main_qty REAL NOT NULL,
+  rule_name TEXT,
+  operator TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_count_item ON count_lines (mode, item_code);
 CREATE TABLE IF NOT EXISTS print_jobs (
   order_key TEXT NOT NULL,
   kind TEXT NOT NULL,
@@ -379,7 +394,31 @@ export interface DiagRow { id: number; at: string; source: string; message: stri
 export const DIAG_KEEP = 300;
 export interface AuditRow { id: number; at: string; operator: string | null; event: string; ref: string | null; detail: string | null }
 /** الجداول التي تُنسخ احتياطياً وتُستعاد (الإعدادات، البيانات، الطباعة). */
-export const SNAPSHOT_TABLES = ["imports", "lines", "invoice_state", "scans", "app_state", "print_files", "print_jobs"] as const;
+export const SNAPSHOT_TABLES = ["imports", "lines", "invoice_state", "scans", "app_state", "print_files", "print_jobs", "count_lines"] as const;
+/** جداول قد تغيب عن نسخ احتياطية أقدم؛ استعادتها تُفرغ الجدول فقط. */
+const OPTIONAL_SNAPSHOT_TABLES: readonly string[] = ["count_lines"];
+
+export type CountMode = "receive" | "count";
+export interface CountLine {
+  id: number;
+  mode: CountMode;
+  item_code: string;
+  cartons: number;
+  boxes: number;
+  loose: number;
+  pieces: number;
+  main_unit: string;
+  main_qty: number;
+  rule_name: string | null;
+  operator: string | null;
+  created_at: string;
+}
+export interface CountTotal {
+  item_code: string;
+  pieces: number;
+  main_unit: string;
+  entries: number;
+}
 export interface Snapshot {
   app: "marsood";
   format: 1;
@@ -914,6 +953,67 @@ export class AuditEngine {
   }
 
 
+  /* --------------------------- الاستلام والجرد ---------------------------- */
+
+  /** يسجّل كمية استلام/جرد؛ الحساب (الحبات والوحدة الرئيسية) يأتي من محرك التعبئة. */
+  addCountLine(input: { mode: CountMode; itemCode: string; cartons: number; boxes: number; loose: number; pieces: number; mainUnit: string; mainQty: number; ruleName: string | null }): Promise<number> {
+    return this.enqueue(() =>
+      this.tx(async () => {
+        await this.requireSession();
+        const code = codeKey(input.itemCode);
+        if (!code) throw new Error("كود الصنف فارغ.");
+        if (input.mode !== "receive" && input.mode !== "count") throw new Error("نوع العملية غير معروف.");
+        for (const n of [input.cartons, input.boxes, input.loose, input.pieces]) {
+          if (!Number.isInteger(n) || n < 0) throw new Error("الكميات أعداد صحيحة غير سالبة.");
+        }
+        if (input.pieces === 0) throw new Error("الكمية صفر.");
+        const operator = this.session?.name ?? (await this.readSetting("operator"));
+        const res = await this.db.run(
+          "INSERT INTO count_lines (mode, item_code, cartons, boxes, loose, pieces, main_unit, main_qty, rule_name, operator, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+          [input.mode, code, input.cartons, input.boxes, input.loose, input.pieces, input.mainUnit, input.mainQty, input.ruleName, operator, this.now()],
+        );
+        await this.audit(input.mode === "receive" ? "receive" : "stocktake", code, `${input.pieces} حبة`);
+        return res.lastId;
+      }),
+    );
+  }
+
+  listCountLines(mode: CountMode, limit = 100): Promise<CountLine[]> {
+    return this.enqueue(() => this.db.all<CountLine>("SELECT * FROM count_lines WHERE mode = ? ORDER BY id DESC LIMIT ?", [mode, limit]));
+  }
+
+  /** إجمالي كل صنف بالحبات (يُحوَّل لاحقاً إلى كرتون/علبة/وحدة رئيسية في الواجهة). */
+  countTotals(mode: CountMode): Promise<CountTotal[]> {
+    return this.enqueue(() =>
+      this.db.all<CountTotal>(
+        "SELECT item_code, SUM(pieces) AS pieces, MAX(main_unit) AS main_unit, COUNT(*) AS entries FROM count_lines WHERE mode = ? GROUP BY item_code ORDER BY item_code",
+        [mode],
+      ),
+    );
+  }
+
+  deleteCountLine(id: number): Promise<void> {
+    return this.enqueue(() =>
+      this.tx(async () => {
+        await this.requireSession();
+        const [row] = await this.db.all<{ item_code: string; pieces: number }>("SELECT item_code, pieces FROM count_lines WHERE id = ?", [id]);
+        if (!row) return;
+        await this.db.run("DELETE FROM count_lines WHERE id = ?", [id]);
+        await this.audit("count-delete", row.item_code, `${row.pieces} حبة`);
+      }),
+    );
+  }
+
+  clearCountLines(mode: CountMode): Promise<void> {
+    return this.enqueue(() =>
+      this.tx(async () => {
+        await this.requireSession("supervisor");
+        await this.db.run("DELETE FROM count_lines WHERE mode = ?", [mode]);
+        await this.audit("count-clear", mode, "مسح العمليات");
+      }),
+    );
+  }
+
   /* ------------------------------- الإعدادات ----------------------------- */
 
   private async readSetting(key: string): Promise<string | null> {
@@ -1419,12 +1519,14 @@ export class AuditEngine {
         if (snapshot?.app !== "marsood" || snapshot.format !== 1 || typeof snapshot.tables !== "object") throw new Error("الملف ليس نسخة احتياطية صالحة لمِرصاد.");
         for (const name of SNAPSHOT_TABLES) {
           const t = snapshot.tables[name];
+          if (!t && OPTIONAL_SNAPSHOT_TABLES.includes(name)) continue;
           if (!t || !Array.isArray(t.columns) || !Array.isArray(t.rows)) throw new Error(`النسخة ناقصة: الجدول ${name} غير موجود.`);
           if (!t.columns.every((c) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(c))) throw new Error("أسماء أعمدة غير صالحة في النسخة.");
         }
         let rowsTotal = 0;
         for (const name of SNAPSHOT_TABLES) {
           await this.db.run(`DELETE FROM ${name}`);
+          if (!snapshot.tables[name]) continue;
           const { columns, rows } = snapshot.tables[name];
           if (rows.length === 0) continue;
           const marks = `(${columns.map(() => "?").join(",")})`;

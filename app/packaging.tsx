@@ -4,7 +4,7 @@ import { router } from "expo-router";
 import { Button, Card, Header, Notice, Screen, SectionTitle } from "@/components/MarsoodUI";
 import { useEngine } from "@/lib/core/hooks";
 import {
-  UNITS, applyMainUnit, defaultRules, findOverlaps, loadRules, parseScope, resolveLine, rulesInScope, validateRule, type PackRule, type Unit,
+  BOX_SIZES, UNITS, applyMainUnit, boxCountOptions, defaultRules, findOverlaps, loadRules, makeRange, parseScope, resolveLine, rulesInScope, validateRule, type PackRule, type Unit,
 } from "@/lib/core/packaging";
 import { palette } from "@/lib/palette";
 
@@ -21,6 +21,20 @@ function Chips({ value, onChange }: { value: Unit; onChange: (unit: Unit) => voi
     </View>
   );
 }
+
+function NumChips({ options, value, onChange, format }: { options: readonly number[]; value: number; onChange: (n: number) => void; format?: (n: number) => string }) {
+  return (
+    <View style={styles.chips}>
+      {options.map((n) => (
+        <Pressable key={n} accessibilityRole="button" onPress={() => onChange(n)} style={[styles.chip, value === n && styles.chipOn]}>
+          <Text style={[styles.chipText, value === n && styles.chipTextOn]}>{format ? format(n) : n}</Text>
+        </Pressable>
+      ))}
+    </View>
+  );
+}
+
+const boxLabel = (n: number) => (n === 12 ? "12 (درزن)" : `${n} حبات`);
 
 function Field({ label, value, onChange, numeric = true }: { label: string; value: string; onChange: (text: string) => void; numeric?: boolean }) {
   return (
@@ -40,6 +54,13 @@ export default function PackagingScreen() {
   const [mainUnit, setMainUnit] = useState<Unit>("DZ");
   const [note, setNote] = useState("");
   const [error, setError] = useState("");
+  const [nName, setNName] = useState("");
+  const [nFrom, setNFrom] = useState("");
+  const [nTo, setNTo] = useState("");
+  const [nBox, setNBox] = useState(6);
+  const [nBoxes, setNBoxes] = useState(2);
+  const [nIssue, setNIssue] = useState<Unit>("EH");
+  const [nMain, setNMain] = useState<Unit>("EH");
   const [calcCode, setCalcCode] = useState("");
   const [calcQty, setCalcQty] = useState("");
   const [calcUnit, setCalcUnit] = useState<Unit>("HDZ");
@@ -74,6 +95,27 @@ export default function PackagingScreen() {
 
   const patch = (id: string, change: Partial<PackRule>) => setRules((list) => list.map((r) => (r.id === id ? { ...r, ...change } : r)));
   const invalid = rules.filter((r) => validateRule(r).length > 0);
+
+  function pickBox(size: number) {
+    setNBox(size);
+    const options = boxCountOptions(size);
+    if (!options.includes(nBoxes)) setNBoxes(options[0]);
+  }
+
+  function addRange() {
+    setError("");
+    setNote("");
+    const from = num(nFrom);
+    const to = nTo.trim() ? num(nTo) : null;
+    if (!Number.isFinite(from) || (to !== null && !Number.isFinite(to))) return setError("أدخل باركود صحيحاً (أرقام فقط).");
+    try {
+      const rule = makeRange({ name: nName, from, to, boxPieces: nBox, boxesPerCarton: nBoxes, issueUnit: nIssue, mainUnit: nMain });
+      setRules((list) => [...list, rule]);
+      setNote(`أُضيف المدى ${rule.from}${rule.to !== rule.from ? ` – ${rule.to}` : ""}. اضغط «حفظ القواعد» للاعتماد.`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "تعذرت الإضافة.");
+    }
+  }
 
   async function save() {
     if (!engine) return;
@@ -112,7 +154,7 @@ export default function PackagingScreen() {
       </Card>
 
       <Card>
-        <SectionTitle title="٣) العبوات والعلاقات" hint="كرتون: 12–72 حبة، 1–12 علبة" />
+        <SectionTitle title="٣) العبوات والعلاقات" hint="علبة 3/4/5/6 حبات أو درزن 12؛ كرتون 12–72 حبة" />
         {!ready ? <Text style={styles.hint}>جارٍ التحميل…</Text> : null}
         {rules.map((r) => {
           const errs = validateRule(r);
@@ -123,10 +165,14 @@ export default function PackagingScreen() {
                 <Field label="من باركود" value={String(r.from || "")} onChange={(t) => patch(r.id, { from: num(t) || 0 })} />
                 <Field label="إلى باركود" value={String(r.to || "")} onChange={(t) => patch(r.id, { to: num(t) || 0 })} />
               </View>
-              <View style={styles.row}>
-                <Field label="حبات الكرتون" value={String(r.cartonPieces || "")} onChange={(t) => patch(r.id, { cartonPieces: num(t) || 0 })} />
-                <Field label="علب الكرتون" value={String(r.boxesPerCarton || "")} onChange={(t) => patch(r.id, { boxesPerCarton: num(t) || 0 })} />
-              </View>
+              <Text style={styles.label}>حجم العلبة</Text>
+              <NumChips options={BOX_SIZES} value={r.boxesPerCarton > 0 ? r.cartonPieces / r.boxesPerCarton : 0} format={boxLabel} onChange={(size) => patch(r.id, { cartonPieces: size * r.boxesPerCarton })} />
+              <Text style={styles.label}>عدد العلب في الكرتون (الكرتون = {r.cartonPieces} حبة)</Text>
+              <NumChips
+                options={Array.from({ length: 12 }, (_, i) => i + 1)}
+                value={r.boxesPerCarton}
+                onChange={(boxes) => patch(r.id, { cartonPieces: (r.boxesPerCarton > 0 ? r.cartonPieces / r.boxesPerCarton : 6) * boxes, boxesPerCarton: boxes })}
+              />
               <Text style={styles.label}>وحدة صرف الطلبات</Text>
               <Chips value={r.issueUnit} onChange={(u) => patch(r.id, { issueUnit: u })} />
               <Text style={styles.label}>الوحدة الرئيسية</Text>
@@ -141,8 +187,25 @@ export default function PackagingScreen() {
           );
         })}
         {overlaps.length > 0 ? <Notice tone="warning" title="تداخل في المدى" body={`${overlaps.length} تداخل؛ تُطبَّق القاعدة الأضيق مدىً.`} /> : null}
-        <Button title="إضافة قاعدة" icon="plus" variant="outline" onPress={() => setRules((l) => [...l, { id: `r${Date.now()}`, name: "مجموعة جديدة", from: 1, to: 1, cartonPieces: 12, boxesPerCarton: 2, issueUnit: "EH", mainUnit: "EH", enabled: true }])} />
         <Button title="استرجاع الجدول المعتمد" icon="restore" variant="outline" onPress={() => setRules(defaultRules())} />
+      </Card>
+
+      <Card>
+        <SectionTitle title="إضافة مدى جديد" hint="مدى أكواد، أو كود واحد بترك «إلى» فارغاً" />
+        <Field label="اسم المجموعة" value={nName} onChange={setNName} numeric={false} />
+        <View style={styles.row}>
+          <Field label="من باركود" value={nFrom} onChange={setNFrom} />
+          <Field label="إلى باركود (اختياري)" value={nTo} onChange={setNTo} />
+        </View>
+        <Text style={styles.label}>حجم العلبة (ما بين 7 و11 حبة جزء من الدرزن وليس علبة)</Text>
+        <NumChips options={BOX_SIZES} value={nBox} onChange={pickBox} format={boxLabel} />
+        <Text style={styles.label}>عدد العلب في الكرتون — الكرتون = {nBox * nBoxes} حبة</Text>
+        <NumChips options={boxCountOptions(nBox)} value={nBoxes} onChange={setNBoxes} />
+        <Text style={styles.label}>وحدة صرف الطلبات</Text>
+        <Chips value={nIssue} onChange={setNIssue} />
+        <Text style={styles.label}>الوحدة الرئيسية</Text>
+        <Chips value={nMain} onChange={setNMain} />
+        <Button title="إضافة المدى" icon="plus" variant="success" onPress={addRange} />
       </Card>
 
       <Card>
