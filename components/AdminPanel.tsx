@@ -126,6 +126,7 @@ export function AdminPanel({ engine, session }: { engine: AuditEngine; session: 
 
           <Card>
             <SectionTitle title="سجل الأعطال" hint="أخطاء التطبيق غير المتوقعة محفوظة محلياً للتشخيص" />
+            <Button title="محرك التعبئة" icon="package-variant-closed" variant="outline" onPress={() => router.push("/packaging")} />
             <Button title="عرض سجل الأعطال" icon="bug-outline" variant="outline" onPress={() => router.push("/diagnostics")} />
           </Card>
 

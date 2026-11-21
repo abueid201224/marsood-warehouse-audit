@@ -15,7 +15,7 @@ import type { AlertKind } from "@/lib/tones";
 import { Modal } from "react-native";
 import { type InvoiceView, type ItemRow, type ScanKind, type ScanResult } from "@/lib/core/engine";
 import { STATUS_LABELS, formatClock } from "@/lib/core/format";
-import { useEngine } from "@/lib/core/hooks";
+import { useEngine, usePackRules } from "@/lib/core/hooks";
 import { palette } from "@/lib/palette";
 import { useLayout } from "@/lib/layout";
 import { usePrintSummary } from "@/lib/print/hooks";
@@ -99,6 +99,7 @@ const KIND_COLOR: Record<ScanKind, string> = { ok: palette.tealDeep, over: palet
 
 export default function ScanScreen() {
   const { engine, error } = useEngine();
+  const packRules = usePackRules(engine);
   const { isWide } = useLayout();
   const [focused, setFocused] = useState(false);
   const [view, setView] = useState<View_ | null>(null);
@@ -358,7 +359,7 @@ export default function ScanScreen() {
           ) : null}
             </View>
             <View style={styles.paneMain}>
-              <ItemsTable items={view?.items ?? []} errors={errorCodes} readonly={!!readonly} onAdjust={adjust} />
+              <ItemsTable items={view?.items ?? []} errors={errorCodes} readonly={!!readonly} onAdjust={adjust} rules={packRules} />
 
             </View>
           </View>
@@ -408,7 +409,7 @@ export default function ScanScreen() {
             )}
           </Card>
 
-              <ItemsTable items={view?.items ?? []} errors={errorCodes} readonly={!!readonly} onAdjust={adjust} />
+              <ItemsTable items={view?.items ?? []} errors={errorCodes} readonly={!!readonly} onAdjust={adjust} rules={packRules} />
 
           {recent.length > 0 ? (
             <Card>

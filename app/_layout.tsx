@@ -44,6 +44,7 @@ export default function RootLayout() {
           <Stack.Screen name="audit" />
           <Stack.Screen name="productivity" />
           <Stack.Screen name="diagnostics" />
+          <Stack.Screen name="packaging" />
         </Stack>
       </SafeAreaProvider>
     </GestureHandlerRootView>
