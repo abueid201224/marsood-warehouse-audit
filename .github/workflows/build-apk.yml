@@ -39,7 +39,7 @@ jobs:
         run: pnpm exec tsc --noEmit
 
       - name: Unit tests (كل اختبارات التطبيق عدا اختبارات الخادم القديم)
-        run: pnpm exec vitest run tests/engine tests/importer tests/xlsx tests/base64 tests/report tests/security tests/backup tests/sync tests/export tests/print tests/layout tests/tones tests/scanGate
+        run: pnpm exec vitest run tests/engine tests/importer tests/xlsx tests/base64 tests/report tests/security tests/backup tests/sync tests/export tests/print tests/layout tests/tones tests/scanGate tests/packaging
 
       - name: Bundle JavaScript for Android
         run: pnpm exec expo export --platform android --output-dir /tmp/marsood-android
