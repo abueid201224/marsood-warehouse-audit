@@ -1,8 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Pressable, Switch } from "react-native";
 import { StyleSheet, Text, View } from "react-native";
 import { useFocusEffect } from "expo-router";
-import * as Haptics from "expo-haptics";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { backupQuietly } from "@/lib/backup/files";
 import { Button, Card, EmptyState, Header, Metric, Notice, ProgressBar, Screen, SectionTitle, StatusBadge } from "@/components/MarsoodUI";
@@ -10,8 +9,9 @@ import { CameraScanner } from "@/components/CameraScanner";
 import { PrintAlert } from "@/components/PrintAlert";
 import { ScannerInput } from "@/components/ScannerInput";
 import { ItemsTable, type ErrorCode } from "@/components/ItemsTable";
+import { applyPrefs, planForFinish, planForScan, type FeedbackPlan } from "@/lib/feedback";
+import { runHaptic } from "@/lib/haptics";
 import { playAlert } from "@/lib/sound";
-import type { AlertKind } from "@/lib/tones";
 import { Modal } from "react-native";
 import { type InvoiceView, type ItemRow, type ScanKind, type ScanResult, type SessionTotals, type Stats } from "@/lib/core/engine";
 import { codeKey } from "@/lib/core/codes";
@@ -76,28 +76,6 @@ function describe(result: ScanResult): Feedback | null {
   }
 }
 
-function alertKindOf(result: ScanResult): AlertKind | null {
-  switch (result.type) {
-    case "item": return result.kind === "wrong" ? "wrong" : result.kind === "over" ? "over" : null;
-    case "blocked":
-    case "confirm-switch": return "blocked";
-    case "already-closed": return "closed";
-    case "order-not-found":
-    case "not-today":
-    case "no-invoice":
-    case "locked": return "wrong";
-    default: return null;
-  }
-}
-
-function buzz(result: ScanResult) {
-  const kind =
-    result.type === "item"
-      ? result.kind === "ok" ? Haptics.NotificationFeedbackType.Success : result.kind === "over" ? Haptics.NotificationFeedbackType.Warning : Haptics.NotificationFeedbackType.Error
-      : result.type === "order-opened" || result.type === "same-order" ? Haptics.NotificationFeedbackType.Success : Haptics.NotificationFeedbackType.Error;
-  Haptics.notificationAsync(kind).catch(() => undefined);
-}
-
 const KIND_LABEL: Record<ScanKind, string> = { ok: "مقبول", over: "تجهيز زائد", wrong: "خطأ تجهيز", unknown: "غير مرتبط" };
 const KIND_COLOR: Record<ScanKind, string> = { ok: palette.tealDeep, over: palette.amber, wrong: palette.red, unknown: palette.muted };
 
@@ -113,6 +91,8 @@ export default function ScanScreen() {
   const [printEnabled, setPrintEnabled] = useState(true);
   const [soundOn, setSoundOn] = useState(true);
   const [safeSwitch, setSafeSwitch] = useState(false);
+  const [vibrationOn, setVibrationOn] = useState(true);
+  const prefsRef = useRef({ sound: true, vibration: true });
   const [session, setSession] = useState<{ stats: Stats; totals: SessionTotals } | null>(null);
   const [lastKey, setLastKey] = useState<string | null>(null);
   const [errorCodes, setErrorCodes] = useState<ErrorCode[]>([]);
@@ -124,6 +104,7 @@ export default function ScanScreen() {
     if (!engine) return;
     engine.getPrintConfig().then((cfg) => setPrintEnabled(cfg.enabled)).catch(() => undefined);
     engine.getSetting("sound_enabled").then((value) => setSoundOn(value !== "0")).catch(() => undefined);
+    engine.getSetting("vibration_enabled").then((value) => setVibrationOn(value !== "0")).catch(() => undefined);
     engine.getSetting("safe_switch").then((value) => setSafeSwitch(value === "1")).catch(() => undefined);
   }, [engine, focused]);
 
@@ -131,6 +112,26 @@ export default function ScanScreen() {
   useEffect(() => {
     if (engine && (printSummary?.pending ?? 0) > 0) kickPrintQueue(engine);
   }, [engine, printSummary?.pending]);
+
+  useEffect(() => {
+    prefsRef.current = { sound: soundOn, vibration: vibrationOn };
+  }, [soundOn, vibrationOn]);
+
+  /** ينفّذ خطة التنبيه وفق تفضيلات الصوت والاهتزاز؛ الإخفاق لا يوقف المسح. */
+  function emit(plan: FeedbackPlan) {
+    const applied = applyPrefs(plan, prefsRef.current);
+    if (applied.tone) playAlert(applied.tone).catch(() => undefined);
+    if (applied.haptic) void runHaptic(applied.haptic);
+  }
+
+  async function toggleVibration() {
+    if (!engine) return;
+    const next = !vibrationOn;
+    setVibrationOn(next);
+    prefsRef.current = { ...prefsRef.current, vibration: next };
+    await engine.setSetting("vibration_enabled", next ? "1" : "0");
+    if (next) void runHaptic("double");
+  }
 
   async function toggleSafeSwitch(value: boolean) {
     if (!engine) return;
@@ -146,7 +147,7 @@ export default function ScanScreen() {
     const next = !soundOn;
     setSoundOn(next);
     await engine.setSetting("sound_enabled", next ? "1" : "0");
-    if (next) playAlert("closed").catch(() => undefined);
+    if (next) playAlert("itemDone").catch(() => undefined);
   }
 
   async function reopenClosed() {
@@ -158,7 +159,7 @@ export default function ScanScreen() {
       const next = describe(result);
       if (result.type === "order-opened") setFeedback({ tone: "success", title: `أُعيد فتح الطلب ${result.orderNo}`, body: "احتُفظ بالمسحات السابقة. امسح الأصناف أو عدّل الكميات." });
       else if (next) setFeedback(next);
-      if (result.type === "blocked" && soundOn) playAlert("blocked").catch(() => undefined);
+      emit(planForScan(result));
       await refresh();
     } catch (cause) {
       setFeedback({ tone: "danger", title: "تعذرت إعادة الفتح", body: cause instanceof Error ? cause.message : "خطأ غير متوقع." });
@@ -174,7 +175,7 @@ export default function ScanScreen() {
     if (!engine || !view || busy) return;
     const result = await engine.adjustItem(view.invoice.order_key, item.item_key, delta);
     if (!result.changed) setFeedback({ tone: "warning", title: "لم يتغير شيء", body: result.reason ?? "" });
-    else if (soundOn && result.scanned > result.qty) playAlert("over").catch(() => undefined);
+    else if (result.scanned > result.qty) emit({ tone: "over", haptic: "warn" });
     await refresh();
   }
 
@@ -227,9 +228,10 @@ export default function ScanScreen() {
         if (next) setFeedback(next);
         if (result.type === "item" && result.kind !== "wrong") setLastKey(codeKey(result.code));
         else if (result.type === "order-opened") setLastKey(null);
-        buzz(result);
-        const alertKind = alertKindOf(result);
-        if (alertKind && soundOn) playAlert(alertKind).catch(() => undefined);
+        // اكتمال كل الفواتير يُستعلم عنه فقط عند إغلاق فاتورة تلقائياً (لا تأخير على مسح الأصناف)
+        const closedNow = result.type === "order-opened" && result.left?.outcome === "closed";
+        const complete = closedNow ? await engine.sessionSummary().then((v) => v.stats.total > 0 && v.stats.remaining === 0).catch(() => false) : false;
+        emit(planForScan(result, { sessionComplete: complete }));
         if (result.type === "already-closed") setClosedPrompt({ orderKey: result.orderKey, orderNo: result.orderNo });
         await refresh();
         kickPrintQueue(engine);
@@ -237,7 +239,7 @@ export default function ScanScreen() {
         setFeedback({ tone: "danger", title: "تعذر تسجيل المسح", body: cause instanceof Error ? cause.message : "خطأ غير متوقع في قاعدة البيانات." });
       }
     },
-    [engine, refresh, soundOn],
+    [engine, refresh],
   );
 
   async function finish(mode: "close" | "post") {
@@ -247,6 +249,8 @@ export default function ScanScreen() {
       const result = await engine.finishCurrent(mode);
       if (!result.ok) setFeedback({ tone: "warning", title: "لم يتم الإنهاء", body: result.reason ?? "" });
       else {
+        const complete = result.outcome === "closed" ? await engine.sessionSummary().then((v) => v.stats.total > 0 && v.stats.remaining === 0).catch(() => false) : false;
+        emit(planForFinish(result.outcome, { sessionComplete: complete }));
         const no = result.orderNo ?? "";
         setFeedback({
           tone: result.outcome === "closed" ? "success" : "warning",
@@ -307,7 +311,11 @@ export default function ScanScreen() {
       </View>
       <Pressable onPress={toggleSound} accessibilityRole="switch" accessibilityState={{ checked: soundOn }} accessibilityLabel="التنبيهات الصوتية" style={styles.printBar}>
         <MaterialCommunityIcons name={soundOn ? "volume-high" : "volume-off"} size={22} color={soundOn ? palette.tealDeep : palette.muted} />
-        <Text style={[styles.printText, { color: soundOn ? palette.tealDeep : palette.muted }]}>{soundOn ? "التنبيهات الصوتية للأخطاء: مفعّلة" : "التنبيهات الصوتية: صامتة"}</Text>
+        <Text style={[styles.printText, { color: soundOn ? palette.tealDeep : palette.muted }]}>{soundOn ? "الأصوات: مفعّلة (نجاح وإتمام وتحذير)" : "الأصوات: صامتة"}</Text>
+      </Pressable>
+      <Pressable onPress={toggleVibration} accessibilityRole="switch" accessibilityState={{ checked: vibrationOn }} accessibilityLabel="الاهتزاز" style={styles.printBar}>
+        <MaterialCommunityIcons name={vibrationOn ? "vibrate" : "vibrate-off"} size={22} color={vibrationOn ? palette.tealDeep : palette.muted} />
+        <Text style={[styles.printText, { color: vibrationOn ? palette.tealDeep : palette.muted }]}>{vibrationOn ? "الاهتزاز: مفعّل" : "الاهتزاز: متوقف"}</Text>
       </Pressable>
       <View style={styles.printBar}>
         <Switch value={safeSwitch} onValueChange={toggleSafeSwitch} trackColor={{ true: palette.teal, false: palette.line }} accessibilityLabel="وضع أمان التبديل بين الفواتير" />
