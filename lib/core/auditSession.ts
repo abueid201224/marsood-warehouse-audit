@@ -77,6 +77,29 @@ export function computeVariances(items: readonly ItemProgress[]): VarianceSummar
   };
 }
 
+export type ItemFilter = "all" | "remaining" | "done" | "variance" | "errors";
+export interface ItemOrder extends ItemProgress {
+  seq: number;
+}
+
+/**
+ * ترتيب/تصفية بنود الفاتورة: الكل (بترتيب Excel)، المتبقي (الأكثر نقصاً أولاً)، المكتمل، الفروقات (زيادة الصنف).
+ * الصنف الممسوح حديثاً (lastKey) يُثبَّت في الأعلى إن كان ضمن المعروض.
+ */
+export function filterItems<T extends ItemOrder>(items: readonly T[], filter: Exclude<ItemFilter, "errors">, lastKey?: string | null): T[] {
+  const natural = [...items].sort((a, b) => a.seq - b.seq);
+  let rows: T[];
+  if (filter === "remaining") rows = natural.filter((i) => i.scanned < i.qty).sort((a, b) => b.qty - b.scanned - (a.qty - a.scanned) || a.seq - b.seq);
+  else if (filter === "done") rows = natural.filter((i) => i.scanned === i.qty);
+  else if (filter === "variance") rows = natural.filter((i) => i.scanned > i.qty).sort((a, b) => b.scanned - b.qty - (a.scanned - a.qty) || a.seq - b.seq);
+  else rows = natural;
+  if (lastKey) {
+    const at = rows.findIndex((i) => i.item_key === lastKey);
+    if (at > 0) rows = [rows[at], ...rows.slice(0, at), ...rows.slice(at + 1)];
+  }
+  return rows;
+}
+
 export type SwitchDecision = "proceed" | "confirm";
 
 export class AuditSessionEngine {

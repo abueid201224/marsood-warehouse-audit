@@ -146,3 +146,60 @@ describe("المرحلة 1: المحرك", () => {
     expect(report.shortages).toHaveLength(0);
   });
 });
+
+describe("المرحلة 2: العرض والاعتماد", () => {
+  const items = [
+    { item_key: "a", seq: 1, qty: 3, scanned: 3 },
+    { item_key: "b", seq: 2, qty: 5, scanned: 1 },
+    { item_key: "c", seq: 3, qty: 2, scanned: 4 },
+    { item_key: "d", seq: 4, qty: 4, scanned: 0 },
+  ];
+  it("فلاتر الأصناف والصنف الأخير في الأعلى", async () => {
+    const { filterItems } = await import("../lib/core/auditSession");
+    expect(filterItems(items, "all").map((i) => i.item_key)).toEqual(["a", "b", "c", "d"]);
+    expect(filterItems(items, "all", "c").map((i) => i.item_key)).toEqual(["c", "a", "b", "d"]);
+    expect(filterItems(items, "remaining").map((i) => i.item_key)).toEqual(["b", "d"]);
+    expect(filterItems(items, "done").map((i) => i.item_key)).toEqual(["a"]);
+    expect(filterItems(items, "variance").map((i) => i.item_key)).toEqual(["c"]);
+    expect(filterItems(items, "remaining", "zzz").map((i) => i.item_key)).toEqual(["b", "d"]);
+  });
+
+  it("إجماليات الجلسة تحسب كل صنف على حدة", async () => {
+    const e = await makeEngine();
+    await e.importRows([row(A, "I1", "1001", 2), row(A, "I1", "1002", 2), row(B, "I2", "2001", 1)], "x.xlsx");
+    await e.handleScan(A);
+    await e.handleScan("1001");
+    await e.handleScan("1001");
+    await e.handleScan("1001"); // زيادة 1 على 1001
+    await e.handleScan("1002"); // عجز 1 على 1002
+    await e.finishCurrent("post");
+    const { totals } = await e.sessionSummary();
+    expect(totals).toMatchObject({ invoices: 2, requiredUnits: 5, acceptedUnits: 3, scannedUnits: 4, shortUnits: 2, overUnits: 1, matchedInvoices: 0, varianceInvoices: 2 });
+    expect(totals.accuracy).toBe(60);
+  });
+
+  it("الاعتماد مرة واحدة وبعد انتهاء كل الفواتير فقط", async () => {
+    const e = await makeEngine();
+    await e.importRows([row(A, "I1", "1001", 1), row(B, "I2", "2001", 1)], "x.xlsx");
+    await expect(e.approveSession("أحمد")).rejects.toThrow();
+    await e.handleScan(A);
+    await e.handleScan("1001");
+    await e.handleScan(B);
+    await e.handleScan("2001");
+    await e.finishCurrent("close");
+    await expect(e.approveSession("  ")).rejects.toThrow();
+    const approval = await e.approveSession("أحمد");
+    expect(approval.name).toBe("أحمد");
+    await expect(e.approveSession("آخر")).rejects.toThrow();
+    const report = await e.errorReport();
+    expect(report.approval?.name).toBe("أحمد");
+    expect(report.totals?.matchedInvoices).toBe(2);
+    const { buildReportHtml } = await import("../lib/core/report");
+    const html = buildReportHtml(report);
+    expect(html).toMatch(/اعتُمد التقرير بواسطة/);
+    expect(html).toMatch(/الاعتماد والتوقيع/);
+    await e.resetAll();
+    await e.importRows([row(A, "I1", "1001", 1)], "y.xlsx");
+    expect((await e.errorReport()).approval).toBeNull();
+  });
+});

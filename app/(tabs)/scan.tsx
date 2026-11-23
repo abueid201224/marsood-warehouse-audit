@@ -13,7 +13,8 @@ import { ItemsTable, type ErrorCode } from "@/components/ItemsTable";
 import { playAlert } from "@/lib/sound";
 import type { AlertKind } from "@/lib/tones";
 import { Modal } from "react-native";
-import { type InvoiceView, type ItemRow, type ScanKind, type ScanResult } from "@/lib/core/engine";
+import { type InvoiceView, type ItemRow, type ScanKind, type ScanResult, type SessionTotals, type Stats } from "@/lib/core/engine";
+import { codeKey } from "@/lib/core/codes";
 import { STATUS_LABELS, formatClock } from "@/lib/core/format";
 import { useEngine } from "@/lib/core/hooks";
 import { palette } from "@/lib/palette";
@@ -112,6 +113,8 @@ export default function ScanScreen() {
   const [printEnabled, setPrintEnabled] = useState(true);
   const [soundOn, setSoundOn] = useState(true);
   const [safeSwitch, setSafeSwitch] = useState(false);
+  const [session, setSession] = useState<{ stats: Stats; totals: SessionTotals } | null>(null);
+  const [lastKey, setLastKey] = useState<string | null>(null);
   const [errorCodes, setErrorCodes] = useState<ErrorCode[]>([]);
   const [closedPrompt, setClosedPrompt] = useState<{ orderKey: string; orderNo: string } | null>(null);
   const [printRows, setPrintRows] = useState<PrintLogRow[]>([]);
@@ -192,6 +195,7 @@ export default function ScanScreen() {
 
   const refresh = useCallback(async () => {
     if (!engine) return;
+    engine.sessionSummary().then(setSession).catch(() => undefined);
     const key = await engine.getCurrent();
     if (!key) {
       setView(null);
@@ -221,6 +225,8 @@ export default function ScanScreen() {
         const result = await engine.handleScan(code);
         const next = describe(result);
         if (next) setFeedback(next);
+        if (result.type === "item" && result.kind !== "wrong") setLastKey(codeKey(result.code));
+        else if (result.type === "order-opened") setLastKey(null);
         buzz(result);
         const alertKind = alertKindOf(result);
         if (alertKind && soundOn) playAlert(alertKind).catch(() => undefined);
@@ -310,6 +316,22 @@ export default function ScanScreen() {
       </View>
       {feedback ? <Notice title={feedback.title} body={feedback.body} tone={tone} /> : null}
 
+      {session && session.stats.total > 0 ? (
+        <Card>
+          <View style={styles.sessionRow}>
+            <View style={styles.sessionBig}>
+              <Text style={styles.sessionPercent}>{session.totals.accuracy}%</Text>
+              <Text style={styles.sessionLabel}>إنجاز الجلسة</Text>
+            </View>
+            <View style={styles.sessionCell}><Text style={styles.sessionNum}>{session.stats.closed}/{session.stats.total}</Text><Text style={styles.sessionLabel}>فواتير منتهية</Text></View>
+            <View style={styles.sessionCell}><Text style={[styles.sessionNum, session.stats.remaining === 0 && { color: palette.tealDeep }]}>{session.stats.remaining}</Text><Text style={styles.sessionLabel}>متبقية</Text></View>
+            <View style={styles.sessionCell}><Text style={styles.sessionNum}>{session.totals.acceptedUnits}/{session.totals.requiredUnits}</Text><Text style={styles.sessionLabel}>الكميات</Text></View>
+          </View>
+          <ProgressBar percent={session.totals.accuracy} color={session.stats.remaining === 0 ? palette.tealDeep : palette.teal} />
+          {session.stats.remaining === 0 ? <Notice title="اكتملت كل فواتير الجلسة" body="افتح تبويب التقرير لمراجعة الإجماليات واعتماد التقرير وتوقيعه." tone="success" /> : null}
+        </Card>
+      ) : null}
+
       {!invoice ? (
         <Card>
           <EmptyState icon="barcode-scan" title="لا توجد فاتورة مفتوحة" body="امسح رقم الطلب المطبوع على البوليصة لفتح فاتورته، ثم امسح أصنافها واحداً واحداً." />
@@ -377,7 +399,7 @@ export default function ScanScreen() {
           ) : null}
             </View>
             <View style={styles.paneMain}>
-              <ItemsTable items={view?.items ?? []} errors={errorCodes} readonly={!!readonly} onAdjust={adjust} />
+              <ItemsTable items={view?.items ?? []} errors={errorCodes} readonly={!!readonly} onAdjust={adjust} lastKey={lastKey} />
 
             </View>
           </View>
@@ -427,7 +449,7 @@ export default function ScanScreen() {
             )}
           </Card>
 
-              <ItemsTable items={view?.items ?? []} errors={errorCodes} readonly={!!readonly} onAdjust={adjust} />
+              <ItemsTable items={view?.items ?? []} errors={errorCodes} readonly={!!readonly} onAdjust={adjust} lastKey={lastKey} />
 
           {recent.length > 0 ? (
             <Card>
@@ -478,6 +500,12 @@ const styles = StyleSheet.create({
   invoiceHead: { flexDirection: "row", alignItems: "center", gap: 12 },
   orderNo: { color: palette.ink, fontSize: 20, fontWeight: "900", textAlign: "right" },
   invoiceNo: { color: palette.muted, fontSize: 13, textAlign: "right", marginTop: 3 },
+  sessionRow: { flexDirection: "row", alignItems: "center", gap: 10, flexWrap: "wrap" },
+  sessionBig: { minWidth: 110, alignItems: "center" },
+  sessionPercent: { color: palette.tealDeep, fontSize: 40, fontWeight: "900" },
+  sessionCell: { flex: 1, minWidth: 80, alignItems: "center" },
+  sessionNum: { color: palette.ink, fontSize: 24, fontWeight: "900" },
+  sessionLabel: { color: palette.muted, fontSize: 12, fontWeight: "800" },
   percent: { color: palette.tealDeep, fontSize: 30, fontWeight: "900" },
   progressText: { color: palette.inkSoft, fontSize: 13, textAlign: "right" },
   metricRow: { flexDirection: "row", flexWrap: "wrap", gap: 10 },

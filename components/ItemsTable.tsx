@@ -1,11 +1,12 @@
 import { memo, useMemo, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
-import { Card, SectionTitle, StatusBadge } from "@/components/MarsoodUI";
+import { Card, ProgressBar, SectionTitle, StatusBadge } from "@/components/MarsoodUI";
+import { filterItems, itemPercent, type ItemFilter } from "@/lib/core/auditSession";
 import { itemState, type ItemRow } from "@/lib/core/engine";
 import { palette } from "@/lib/palette";
 
-export type ItemFilter = "natural" | "short" | "over" | "errors";
+export type { ItemFilter };
 export interface ErrorCode {
   code: string;
   count: number;
@@ -18,19 +19,14 @@ const ITEM_BADGE = {
   over: { state: "bad", label: "زائد" },
 } as const;
 
-/** ترتيب/تصفية بنود الفاتورة: الطبيعي (كما في Excel)، النقص، الزيادة، أو أكواد الأخطاء. */
-export function filterItems(items: ItemRow[], filter: Exclude<ItemFilter, "errors">): ItemRow[] {
-  const natural = [...items].sort((a, b) => a.seq - b.seq);
-  if (filter === "short") return natural.filter((i) => i.scanned < i.qty).sort((a, b) => b.qty - b.scanned - (a.qty - a.scanned) || a.seq - b.seq);
-  if (filter === "over") return natural.filter((i) => i.scanned > i.qty).sort((a, b) => b.scanned - b.qty - (a.scanned - a.qty) || a.seq - b.seq);
-  return natural;
-}
-
-const Row = memo(function Row({ item, adjustable, onAdjust }: { item: ItemRow; adjustable: boolean; onAdjust: (item: ItemRow, delta: 1 | -1) => void }) {
+const Row = memo(function Row({ item, adjustable, onAdjust, highlight }: { item: ItemRow; adjustable: boolean; onAdjust: (item: ItemRow, delta: 1 | -1) => void; highlight: boolean }) {
   const badge = ITEM_BADGE[itemState(item)];
+  const percent = itemPercent(item.scanned, item.qty);
+  const barColor = item.scanned > item.qty ? palette.red : percent >= 100 ? palette.tealDeep : palette.amber;
 
   return (
-    <View style={styles.tr}>
+    <View style={[styles.rowWrap, highlight && styles.hot]}>
+    <View style={styles.tr0}>
       <View style={{ flex: 1.15 }}><StatusBadge state={badge.state} label={badge.label} /></View>
       <View style={[styles.qtyCell, { flex: 1.5 }]}>
         {adjustable ? (
@@ -50,28 +46,48 @@ const Row = memo(function Row({ item, adjustable, onAdjust }: { item: ItemRow; a
       <Text style={[styles.td, { flex: 1.3, fontWeight: "800" }]} selectable>{item.item_code}</Text>
       <Text style={[styles.td, styles.desc, { flex: 2 }]} numberOfLines={2}>{item.item_desc || "—"}</Text>
     </View>
+    <View style={styles.barRow}>
+      <View style={{ flex: 1 }}><ProgressBar percent={percent} color={barColor} /></View>
+      <Text style={[styles.pct, { color: barColor }]}>{percent}%</Text>
+    </View>
+    </View>
   );
 });
 
-export function ItemsTable({ items, errors, readonly, onAdjust }: { items: ItemRow[]; errors: ErrorCode[]; readonly: boolean; onAdjust: (item: ItemRow, delta: 1 | -1) => void }) {
-  const [filter, setFilter] = useState<ItemFilter>("natural");
+export function ItemsTable({ items, errors, readonly, onAdjust, lastKey = null }: { items: ItemRow[]; errors: ErrorCode[]; readonly: boolean; onAdjust: (item: ItemRow, delta: 1 | -1) => void; lastKey?: string | null }) {
+  const [filter, setFilter] = useState<ItemFilter>("all");
   const counts = useMemo(
-    () => ({ natural: items.length, short: items.filter((i) => i.scanned < i.qty).length, over: items.filter((i) => i.scanned > i.qty).length, errors: errors.reduce((sum, e) => sum + e.count, 0) }),
+    () => ({
+      all: items.length,
+      remaining: items.filter((i) => i.scanned < i.qty).length,
+      done: items.filter((i) => i.scanned === i.qty).length,
+      variance: items.filter((i) => i.scanned > i.qty).length,
+      errors: errors.reduce((sum, e) => sum + e.count, 0),
+    }),
     [items, errors],
   );
-  const rows = useMemo(() => (filter === "errors" ? [] : filterItems(items, filter)), [items, filter]);
+  const rows = useMemo(() => (filter === "errors" ? [] : filterItems(items, filter, lastKey)), [items, filter, lastKey]);
   const chips: Array<{ key: ItemFilter; label: string }> = [
-    { key: "natural", label: "الترتيب الطبيعي" },
-    { key: "short", label: "النقص" },
-    { key: "over", label: "الزيادة" },
+    { key: "all", label: "الكل" },
+    { key: "remaining", label: "المتبقي" },
+    { key: "done", label: "المكتمل" },
+    { key: "variance", label: "الفروقات" },
     { key: "errors", label: "الأخطاء" },
   ];
+  const hints: Record<ItemFilter, string> = {
+    all: "بترتيب شيت Excel — آخر صنف ممسوح في الأعلى",
+    remaining: "الأكثر نقصاً أولاً",
+    done: "أصناف اكتملت كميتها",
+    variance: "الأكثر زيادة أولاً",
+    errors: "أكواد غير موجودة في الفاتورة",
+  };
+  const emptyText: Record<Exclude<ItemFilter, "errors">, string> = { all: "لا توجد أصناف.", remaining: "لا توجد أصناف متبقية.", done: "لا توجد أصناف مكتملة بعد.", variance: "لا توجد فروقات." };
   return (
     <Card>
-      <SectionTitle title="أصناف الفاتورة" hint={filter === "natural" ? "بترتيب شيت Excel" : filter === "short" ? "الأكثر نقصاً أولاً" : filter === "over" ? "الأكثر زيادة أولاً" : "أكواد غير موجودة في الفاتورة"} />
+      <SectionTitle title="أصناف الفاتورة" hint={hints[filter]} />
       <View style={styles.chips}>
         {chips.map((chip) => (
-          <Pressable key={chip.key} accessibilityRole="button" onPress={() => setFilter(chip.key)} style={[styles.chip, filter === chip.key && styles.chipActive, chip.key !== "natural" && counts[chip.key] > 0 && filter !== chip.key && styles.chipAlert]}>
+          <Pressable key={chip.key} accessibilityRole="button" onPress={() => setFilter(chip.key)} style={[styles.chip, filter === chip.key && styles.chipActive, (chip.key === "variance" || chip.key === "errors") && counts[chip.key] > 0 && filter !== chip.key && styles.chipAlert]}>
             <Text style={[styles.chipText, filter === chip.key && styles.chipTextActive]}>{chip.label} ({counts[chip.key]})</Text>
           </Pressable>
         ))}
@@ -94,7 +110,7 @@ export function ItemsTable({ items, errors, readonly, onAdjust }: { items: ItemR
             <Text style={[styles.th, { flex: 1.3 }]}>كود الصنف</Text>
             <Text style={[styles.th, { flex: 2 }]}>بيان الصنف</Text>
           </View>
-          {rows.length === 0 ? <Text style={styles.empty}>{filter === "short" ? "لا توجد أصناف ناقصة." : "لا توجد أصناف زائدة."}</Text> : rows.map((item) => <Row key={item.item_key} item={item} adjustable={!readonly} onAdjust={onAdjust} />)}
+          {rows.length === 0 ? <Text style={styles.empty}>{emptyText[filter]}</Text> : rows.map((item) => <Row key={item.item_key} item={item} adjustable={!readonly} onAdjust={onAdjust} highlight={!!lastKey && item.item_key === lastKey} />)}
         </>
       )}
     </Card>
@@ -110,6 +126,11 @@ const styles = StyleSheet.create({
   chipTextActive: { color: palette.white },
   tableHead: { flexDirection: "row", gap: 8, paddingBottom: 8, borderBottomWidth: 1, borderBottomColor: palette.line },
   th: { color: palette.muted, fontSize: 12, fontWeight: "800", textAlign: "right" },
+  rowWrap: { borderBottomWidth: 1, borderBottomColor: palette.line, paddingVertical: 6, gap: 6, borderRadius: 8 },
+  hot: { backgroundColor: "#E5F3EF" },
+  tr0: { flexDirection: "row", alignItems: "center", gap: 8 },
+  barRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  pct: { fontSize: 12, fontWeight: "900", minWidth: 38, textAlign: "left" },
   tr: { flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: palette.line },
   td: { color: palette.text, fontSize: 15, textAlign: "right" },
   desc: { fontSize: 13, color: palette.inkSoft },

@@ -1,8 +1,8 @@
 import { useCallback, useState } from "react";
-import { Share, StyleSheet, Text, View } from "react-native";
+import { Share, StyleSheet, Text, TextInput, View } from "react-native";
 import { useFocusEffect } from "expo-router";
 import * as Print from "expo-print";
-import { Button, Card, EmptyState, Header, Metric, Notice, Screen, SectionTitle } from "@/components/MarsoodUI";
+import { Button, Card, EmptyState, Header, Metric, Notice, ProgressBar, Screen, SectionTitle } from "@/components/MarsoodUI";
 import type { ErrorReport } from "@/lib/core/engine";
 import { formatDateTime } from "@/lib/core/format";
 import { useEngine } from "@/lib/core/hooks";
@@ -15,6 +15,8 @@ export default function ReportScreen() {
   const { engine, error } = useEngine();
   const [report, setReport] = useState<ErrorReport | null>(null);
   const [message, setMessage] = useState("");
+  const [details, setDetails] = useState(false);
+  const [approver, setApprover] = useState("");
 
   const load = useCallback(() => {
     if (!engine) return;
@@ -54,6 +56,17 @@ export default function ReportScreen() {
     }
   }
 
+  async function approve() {
+    if (!engine) return;
+    try {
+      await engine.approveSession(approver);
+      setSaved("اعتُمد تقرير الجلسة وسُجّل التوقيع. احفظ ملف PDF للأرشفة.");
+      load();
+    } catch (cause) {
+      setMessage(cause instanceof Error ? cause.message : "تعذر الاعتماد.");
+    }
+  }
+
   async function changeFolder() {
     if (!engine) return;
     try {
@@ -74,6 +87,34 @@ export default function ReportScreen() {
       {saved ? <Notice title="تم الحفظ" body={saved} tone="success" /> : null}
       {report ? (
         <>
+          {report.totals ? (
+            <Card>
+              <SectionTitle title="إجماليات الجلسة" hint={report.sessionId ? `الجلسة ${report.sessionId}` : undefined} />
+              <View style={styles.metrics}>
+                <Metric label="دقة المطابقة" value={`${report.totals.accuracy}%`} icon="target" accent={report.totals.accuracy >= 99 ? palette.tealDeep : palette.amber} />
+                <Metric label="فواتير مطابقة" value={`${report.totals.matchedInvoices}/${report.totals.invoices}`} icon="check-decagram-outline" accent={palette.tealDeep} />
+                <Metric label="فواتير بفروقات" value={String(report.totals.varianceInvoices)} icon="alert-decagram-outline" accent={report.totals.varianceInvoices ? palette.amber : palette.tealDeep} />
+                <Metric label="الممسوح / المطلوب" value={`${report.totals.scannedUnits}/${report.totals.requiredUnits}`} icon="barcode-scan" />
+                <Metric label="عجز (قطعة)" value={String(report.totals.shortUnits)} icon="minus-circle-outline" accent={report.totals.shortUnits ? palette.red : palette.tealDeep} />
+                <Metric label="زيادة (قطعة)" value={String(report.totals.overUnits)} icon="plus-circle-outline" accent={report.totals.overUnits ? palette.amber : palette.tealDeep} />
+              </View>
+              <ProgressBar percent={report.totals.accuracy} color={palette.teal} />
+              <Text style={styles.empty}>العجز والزيادة يُحسبان لكل صنف على حدة؛ زيادة صنف لا تعوّض عجز صنف آخر.</Text>
+            </Card>
+          ) : null}
+          <Card>
+            <SectionTitle title="اعتماد التقرير" hint="مرة واحدة بعد انتهاء كل الفواتير" />
+            {report.approval ? (
+              <Notice title="تقرير معتمد" body={`اعتُمد بواسطة ${report.approval.name} في ${formatDateTime(report.approval.at)}.`} tone="success" />
+            ) : report.stats.remaining > 0 ? (
+              <Notice title="لم تنتهِ الجلسة" body={`متبقٍ ${report.stats.remaining} فاتورة؛ يُفتح الاعتماد بعد انتهاء جميعها.`} tone="info" />
+            ) : (
+              <>
+                <TextInput value={approver} onChangeText={setApprover} placeholder="اسم المعتمِد" placeholderTextColor={palette.muted} style={styles.input} />
+                <Button title="اعتماد وتوقيع التقرير" icon="draw" variant="success" onPress={() => void approve()} disabled={!approver.trim()} />
+              </>
+            )}
+          </Card>
           <View style={styles.metrics}>
             <Metric label="أخطاء تجهيز" value={String(wrongTotal)} icon="close-octagon-outline" accent={wrongTotal ? palette.red : palette.tealDeep} />
             <Metric label="تجهيز زائد" value={String(overTotal)} icon="plus-circle-outline" accent={overTotal ? palette.amber : palette.tealDeep} />
@@ -91,11 +132,16 @@ export default function ReportScreen() {
           </View>
           {empty ? <Card><EmptyState icon="check-decagram-outline" title="لا توجد أخطاء" body="لم تُسجَّل أخطاء تجهيز أو تجهيز زائد أو نواقص حتى الآن." /></Card> : null}
 
+          <Button title={details ? "إخفاء التفاصيل" : "عرض التفاصيل"} icon={details ? "chevron-up" : "chevron-down"} variant="outline" onPress={() => setDetails((v) => !v)} />
+          {details ? (
+          <>
           <Section title="أخطاء التجهيز" hint="كود ليس من أصناف الفاتورة" empty="لا توجد أخطاء تجهيز." rows={report.wrong.map((r) => `طلب ${r.orderNo} • فاتورة ${r.invoices || "—"} • كود ${r.code} × ${r.count}${r.operator ? ` • ${r.operator}` : ""}`)} color={palette.red} />
           <Section title="التجهيز الزائد" hint="مسح أكثر من الكمية المسجلة" empty="لا يوجد تجهيز زائد." rows={report.over.map((r) => `طلب ${r.orderNo} • كود ${r.code} • مطلوب ${r.expected} وممسوح ${r.scanned}`)} color={palette.amber} />
           <Section title="النواقص في الفواتير المرحّلة" hint="أصناف تحتاج استكمالاً" empty="لا توجد نواقص." rows={report.shortages.map((r) => `طلب ${r.orderNo} • كود ${r.code} • ناقص ${r.expected - r.scanned} من ${r.expected}`)} color={palette.amber} />
           <Section title="مسحات غير مرتبطة بفاتورة" hint="رقم طلب غير موجود أو كود بلا فاتورة مفتوحة" empty="لا توجد مسحات غير مرتبطة." rows={report.unknown.map((r) => `${r.code} • ${formatDateTime(r.at)}`)} color={palette.muted} />
           <Section title="سجل الطباعة الصامتة" hint="حالة طباعة الفاتورة والبوليصة لكل طلب منتهٍ" empty="لم تُنفَّذ مهام طباعة." rows={report.printLog.map((r) => `طلب ${r.orderNo} • ${PRINT_KIND_LABELS[r.kind]}: ${PRINT_STATUS_LABELS[r.status]}${r.detail ? ` — ${r.detail}` : ""}`)} color={palette.blue} />
+          </>
+          ) : null}
         </>
       ) : null}
     </Screen>
@@ -119,5 +165,6 @@ const styles = StyleSheet.create({
   actions: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
   action: { flexGrow: 1, minWidth: 180 },
   row: { color: palette.text, fontSize: 13, textAlign: "right", borderRightWidth: 3, paddingRight: 10, paddingVertical: 4 },
+  input: { borderWidth: 1, borderColor: palette.line, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, fontSize: 16, color: palette.text, textAlign: "right", backgroundColor: palette.surface },
   empty: { color: palette.muted, fontSize: 13, textAlign: "right" },
 });

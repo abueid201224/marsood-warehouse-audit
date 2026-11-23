@@ -35,9 +35,20 @@ export function buildReportHtml(report: ErrorReport): string {
   th { background: #E5F3EF; }
   tr { page-break-inside: avoid; }
   .empty { color: #66758A; padding: 6px 0; }
+  .approved { color: #0D635C; font-size: 13px; padding: 6px 0; }
+  table.sign td { height: 70px; vertical-align: top; width: 33%; }
 </style></head><body>
 <h1>تقرير أخطاء المسح — مِرصاد المستودع</h1>
-<div class="meta">أُعدّ في ${escapeHtml(formatDateTime(report.generatedAt))}</div>
+<div class="meta">أُعدّ في ${escapeHtml(formatDateTime(report.generatedAt))}${report.sessionId ? ` • الجلسة ${escapeHtml(report.sessionId)}` : ""}</div>
+${report.totals ? `<h2>إجماليات الجلسة</h2>
+<div class="stats">
+  <div class="stat"><b>${report.totals.matchedInvoices}</b>فواتير مطابقة</div>
+  <div class="stat"><b>${report.totals.varianceInvoices}</b>فواتير بفروقات</div>
+  <div class="stat"><b>${report.totals.scannedUnits} / ${report.totals.requiredUnits}</b>الممسوح / المطلوب</div>
+  <div class="stat"><b>${escapeHtml(formatPercent(report.totals.accuracy))}</b>دقة المطابقة</div>
+  <div class="stat"><b>${report.totals.shortUnits}</b>عجز (قطعة)</div>
+  <div class="stat"><b>${report.totals.overUnits}</b>زيادة (قطعة)</div>
+</div>` : ""}
 <div class="stats">
   <div class="stat"><b>${stats.total}</b>إجمالي الفواتير</div>
   <div class="stat"><b>${stats.closed}</b>المنتهية</div>
@@ -67,7 +78,16 @@ ${table(["#", "رقم الطلب", "رقم الفاتورة", "كود الصنف
 ${table(["#", "الكود", "الوقت"], unknownRows, "لا توجد مسحات غير مرتبطة.")}
 <h2>سجل الطباعة الصامتة</h2>
 ${table(["#", "رقم الطلب", "المستند", "الحالة", "الملف", "تفاصيل"], printRows, "لم تُنفَّذ مهام طباعة.")}
+${signatureBlock(report)}
 </body></html>`;
+}
+
+/** خانات التوقيع والاعتماد؛ تُملأ باسم المعتمِد ووقته إن اعتُمد التقرير. */
+function signatureBlock(report: ErrorReport): string {
+  const a = report.approval;
+  const approved = a ? `<div class="approved">✔ اعتُمد التقرير بواسطة <b>${escapeHtml(a.name)}</b> في ${escapeHtml(formatDateTime(a.at))}</div>` : `<div class="empty">لم يُعتمد التقرير بعد.</div>`;
+  return `<h2>الاعتماد والتوقيع</h2>${approved}
+<table class="sign"><tr><td>المراجع<br/><br/>الاسم: ................<br/>التوقيع: ................</td><td>مشرف المستودع<br/><br/>الاسم: ................<br/>التوقيع: ................</td><td>الاعتماد<br/><br/>${a ? escapeHtml(a.name) : "الاسم: ................"}<br/>التاريخ: ${a ? escapeHtml(formatDateTime(a.at)) : "................"}</td></tr></table>`;
 }
 
 function csvCell(value: unknown): string {

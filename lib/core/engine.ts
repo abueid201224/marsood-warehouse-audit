@@ -136,9 +136,33 @@ export interface SessionInfo {
   checkpointAt: string | null;
 }
 
+/** إجماليات الجلسة: كل صنف يُحسب على حدة، والزيادة لا تعوّض العجز. */
+export interface SessionTotals {
+  invoices: number;
+  /** فواتير منتهية بلا أي عجز أو زيادة أو خطأ تجهيز. */
+  matchedInvoices: number;
+  /** باقي الفواتير: بفروقات أو لم تنتهِ. */
+  varianceInvoices: number;
+  requiredUnits: number;
+  acceptedUnits: number;
+  scannedUnits: number;
+  shortUnits: number;
+  overUnits: number;
+  /** دقة المطابقة % = المطابق ÷ المطلوب. */
+  accuracy: number;
+}
+
+export interface SessionApproval {
+  name: string;
+  at: string;
+  sessionId: string;
+}
+
 export interface ErrorReport {
   generatedAt: string;
   sessionId?: string;
+  totals?: SessionTotals;
+  approval?: SessionApproval | null;
   stats: Stats;
   wrong: ErrorReportRow[];
   over: ErrorReportRow[];
@@ -547,7 +571,7 @@ export class AuditEngine {
           await this.db.run(`DELETE FROM ${table}`);
         }
         // الإعدادات (الطابعات، المجلد، المراجع) وفهرس PDF يبقيان؛ يُمسح فقط مؤشر الفاتورة الحالية
-        await this.db.run("DELETE FROM app_state WHERE key IN ('current_order', 'session_id', 'session_started', 'session_checkpoint')");
+        await this.db.run("DELETE FROM app_state WHERE key IN ('current_order', 'session_id', 'session_started', 'session_checkpoint', 'setting:session_approval')");
         this.auditSession.clearPending();
         await this.readSessionInfo(true);
       }),
@@ -963,6 +987,8 @@ export class AuditEngine {
       return {
         generatedAt: this.now(),
         sessionId: (await this.readSessionInfo(false)).id || undefined,
+        totals: await this.readSessionTotals(),
+        approval: await this.readApproval(),
         stats,
         wrong: grouped.filter((row) => row.kind === "wrong").map(toRow),
         over: grouped.filter((row) => row.kind === "over").map(toRow),
@@ -1037,6 +1063,74 @@ export class AuditEngine {
   }
 
   /* ------------------------------ جلسة التدقيق ---------------------------- */
+
+  private async readSessionTotals(): Promise<SessionTotals> {
+    const [inv] = await this.db.all<{ total: number; matched: number; required: number; accepted: number }>(
+      `SELECT COUNT(*) AS total,
+              COALESCE(SUM(CASE WHEN status = 'closed' AND short_items = 0 AND over_items = 0 AND wrong_scans = 0 THEN 1 ELSE 0 END), 0) AS matched,
+              COALESCE(SUM(total_qty), 0) AS required,
+              COALESCE(SUM(done_qty), 0) AS accepted
+       FROM v_invoice_stats`,
+    );
+    const [units] = await this.db.all<{ scanned: number; short: number; over: number }>(
+      `SELECT COALESCE(SUM(scanned), 0) AS scanned,
+              COALESCE(SUM(CASE WHEN scanned < qty THEN qty - scanned ELSE 0 END), 0) AS short,
+              COALESCE(SUM(CASE WHEN scanned > qty THEN scanned - qty ELSE 0 END), 0) AS over
+       FROM v_item_progress`,
+    );
+    const total = inv?.total ?? 0;
+    const required = inv?.required ?? 0;
+    const accepted = inv?.accepted ?? 0;
+    return {
+      invoices: total,
+      matchedInvoices: inv?.matched ?? 0,
+      varianceInvoices: total - (inv?.matched ?? 0),
+      requiredUnits: required,
+      acceptedUnits: accepted,
+      scannedUnits: units?.scanned ?? 0,
+      shortUnits: units?.short ?? 0,
+      overUnits: units?.over ?? 0,
+      accuracy: required > 0 ? Math.round((accepted / required) * 1000) / 10 : 0,
+    };
+  }
+
+  /** ملخص الجلسة الخفيف لشريط التقدم الشامل في شاشة المسح. */
+  sessionSummary(): Promise<{ stats: Stats; totals: SessionTotals }> {
+    return this.enqueue(async () => ({ stats: await this.readStats(), totals: await this.readSessionTotals() }));
+  }
+
+  private async readApproval(): Promise<SessionApproval | null> {
+    const raw = await this.readSetting("session_approval");
+    if (!raw) return null;
+    try {
+      const value = JSON.parse(raw) as SessionApproval;
+      const info = await this.readSessionInfo(false);
+      return value && value.sessionId === info.id ? value : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** اعتماد وتوقيع تقرير الجلسة مرة واحدة بعد انتهاء كل الفواتير. */
+  approveSession(name: string): Promise<SessionApproval> {
+    return this.enqueue(() =>
+      this.tx(async () => {
+        await this.requireSession();
+        const approver = name.trim();
+        if (!approver) throw new Error("اكتب اسم المعتمِد.");
+        const stats = await this.readStats();
+        if (stats.total === 0) throw new Error("لا توجد فواتير في الجلسة.");
+        if (stats.remaining > 0) throw new Error(`لا يمكن الاعتماد قبل انتهاء كل الفواتير؛ المتبقي ${stats.remaining}.`);
+        const existing = await this.readApproval();
+        if (existing) throw new Error(`اعتُمد التقرير سابقاً بواسطة ${existing.name}.`);
+        const info = await this.readSessionInfo(true);
+        const approval: SessionApproval = { name: approver, at: this.now(), sessionId: info.id };
+        await this.db.run("INSERT OR REPLACE INTO app_state (key, value) VALUES ('setting:session_approval', ?)", [JSON.stringify(approval)]);
+        await this.audit("approve", info.id, `اعتماد تقرير الجلسة: ${approver}`);
+        return approval;
+      }),
+    );
+  }
 
   /** معرّف الجلسة الحالية ووقت بدئها وآخر نقطة حفظ؛ يُنشأ عند أول طلب ويتجدد عند «دفعة جديدة». */
   sessionInfo(): Promise<SessionInfo> {
