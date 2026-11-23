@@ -1,3 +1,4 @@
+import { AuditSessionEngine, SAFE_SWITCH_WINDOW_MS, classifyItemScan } from "./auditSession";
 import { MAX_ITEM_CODE_LENGTH, codeKey, fitsItemCode, normalizeCode } from "./codes";
 import type { ImportRow } from "./importer";
 import { hashPin, randomSalt } from "./sha256";
@@ -81,6 +82,8 @@ export type ScanResult =
   | { type: "locked"; code: string; orderKey: string }
   /** رقم طلب/فاتورة جديد قبل اكتمال الفاتورة الحالية: لا يبدأ مسح جديد. */
   | { type: "blocked"; code: string; orderNo: string; shortItems: number }
+  /** وضع الأمان: بدء فاتورة جديدة أثناء وجود فاتورة مفتوحة يتطلب مسح الكود مرة ثانية خلال ثانيتين. */
+  | { type: "confirm-switch"; code: string; currentNo: string; targetNo: string; windowMs: number }
   /** الطلب الممسوح فاتورته منتهية ومراجعة سابقاً: يُسأل المستخدم عن إعادة الفتح أو التخطي. */
   | { type: "already-closed"; code: string; orderKey: string; orderNo: string };
 
@@ -127,8 +130,15 @@ export interface UnknownScanRow {
   code: string;
   at: string;
 }
+export interface SessionInfo {
+  id: string;
+  startedAt: string;
+  checkpointAt: string | null;
+}
+
 export interface ErrorReport {
   generatedAt: string;
+  sessionId?: string;
   stats: Stats;
   wrong: ErrorReportRow[];
   over: ErrorReportRow[];
@@ -428,6 +438,7 @@ export interface Snapshot {
 
 export class AuditEngine {
   private chain: Promise<unknown> = Promise.resolve();
+  private readonly auditSession = new AuditSessionEngine();
 
   constructor(
     private readonly db: Db,
@@ -536,7 +547,9 @@ export class AuditEngine {
           await this.db.run(`DELETE FROM ${table}`);
         }
         // الإعدادات (الطابعات، المجلد، المراجع) وفهرس PDF يبقيان؛ يُمسح فقط مؤشر الفاتورة الحالية
-        await this.db.run("DELETE FROM app_state WHERE key = 'current_order'");
+        await this.db.run("DELETE FROM app_state WHERE key IN ('current_order', 'session_id', 'session_started', 'session_checkpoint')");
+        this.auditSession.clearPending();
+        await this.readSessionInfo(true);
       }),
     );
   }
@@ -698,7 +711,7 @@ export class AuditEngine {
         if (!invoice || !item) return { changed: false, scanned: 0, qty: 0, reason: "الصنف غير موجود." };
         if (invoice.invoice.status === "closed") return { changed: false, scanned: item.scanned, qty: item.qty, reason: "الفاتورة منتهية؛ أعد فتحها أولاً." };
         if (delta === 1) {
-          const kind = item.scanned + 1 > item.qty ? "over" : "ok";
+          const kind = classifyItemScan(item.scanned, item.qty);
           await this.db.run("INSERT INTO scans (order_key, item_key, code, kind, at, operator) VALUES (?, ?, ?, ?, ?, ?)", [orderKey, itemKey, item.item_code, kind, this.now(), await this.operatorName()]);
           await this.audit("adjust", invoice.invoice.order_no, `+1 ${item.item_code}`);
           return { changed: true, scanned: item.scanned + 1, qty: item.qty };
@@ -724,7 +737,9 @@ export class AuditEngine {
   handleScan(raw: string): Promise<ScanResult> {
     return this.enqueue(() => this.tx(async () => {
       await this.requireSession();
-      return this.processScan(raw);
+      const result = await this.processScan(raw);
+      if (result.type !== "empty") await this.checkpoint(this.now());
+      return result;
     }));
   }
 
@@ -764,7 +779,7 @@ export class AuditEngine {
     if (current && current.invoice.status !== "closed" && fitsItemCode(code)) {
       const item = current.items.find((candidate) => candidate.item_key === key);
       if (item) {
-        const kind = item.scanned + 1 > item.qty ? "over" : "ok";
+        const kind = classifyItemScan(item.scanned, item.qty);
         await this.db.run("INSERT INTO scans (order_key, item_key, code, kind, at, operator) VALUES (?, ?, ?, ?, ?, ?)", [current.invoice.order_key, key, code, kind, at, operator]);
         return { type: "item", kind, code, orderKey: current.invoice.order_key, scanned: item.scanned + 1, qty: item.qty, desc: item.item_desc ?? undefined };
       }
@@ -792,6 +807,12 @@ export class AuditEngine {
       if (targetView?.invoice.status === "closed") return { type: "already-closed", code, orderKey: target, orderNo: targetView.invoice.order_no };
       const staleDay = targetView ? await this.staleRegistration(targetView.invoice) : null;
       if (targetView && staleDay) return { type: "not-today", code, orderKey: target, orderNo: targetView.invoice.order_no, day: staleDay };
+      if (current && current.invoice.status !== "closed" && current.invoice.order_key !== target) {
+        const safe = (await this.readSetting("safe_switch")) === "1";
+        if (this.auditSession.evaluateSwitch(safe, key, Date.parse(at)) === "confirm") {
+          return { type: "confirm-switch", code, currentNo: current.invoice.order_no, targetNo: targetView?.invoice.order_no ?? code, windowMs: SAFE_SWITCH_WINDOW_MS };
+        }
+      }
       return this.openOrder(target, current?.invoice ?? null, code);
     }
 
@@ -941,6 +962,7 @@ export class AuditEngine {
       const stats = await this.readStats();
       return {
         generatedAt: this.now(),
+        sessionId: (await this.readSessionInfo(false)).id || undefined,
         stats,
         wrong: grouped.filter((row) => row.kind === "wrong").map(toRow),
         over: grouped.filter((row) => row.kind === "over").map(toRow),
@@ -1012,6 +1034,33 @@ export class AuditEngine {
         await this.audit("count-clear", mode, "مسح العمليات");
       }),
     );
+  }
+
+  /* ------------------------------ جلسة التدقيق ---------------------------- */
+
+  /** معرّف الجلسة الحالية ووقت بدئها وآخر نقطة حفظ؛ يُنشأ عند أول طلب ويتجدد عند «دفعة جديدة». */
+  sessionInfo(): Promise<SessionInfo> {
+    return this.enqueue(() => this.tx(() => this.readSessionInfo(true)));
+  }
+
+  private async readSessionInfo(create: boolean): Promise<SessionInfo> {
+    const rows = await this.db.all<{ key: string; value: string | null }>("SELECT key, value FROM app_state WHERE key IN ('session_id','session_started','session_checkpoint')");
+    const map = new Map(rows.map((r) => [r.key, r.value]));
+    let id = map.get("session_id") ?? null;
+    let startedAt = map.get("session_started") ?? null;
+    if (!id || !startedAt) {
+      if (!create) return { id: "", startedAt: "", checkpointAt: null };
+      startedAt = this.now();
+      id = `S${startedAt.replace(/\D/g, "").slice(0, 14)}-${Math.floor(Math.random() * 0xfffff).toString(36).toUpperCase().padStart(4, "0")}`;
+      await this.db.run("INSERT OR REPLACE INTO app_state (key, value) VALUES ('session_id', ?), ('session_started', ?)", [id, startedAt]);
+    }
+    return { id, startedAt, checkpointAt: map.get("session_checkpoint") ?? null };
+  }
+
+  /** نقطة حفظ تلقائية (تُكتب ضمن نفس معاملة المسح فتبقى متسقة بعد أي إغلاق مفاجئ). */
+  private async checkpoint(at: string): Promise<void> {
+    await this.readSessionInfo(true);
+    await this.db.run("INSERT OR REPLACE INTO app_state (key, value) VALUES ('session_checkpoint', ?)", [at]);
   }
 
   /* ------------------------------- الإعدادات ----------------------------- */

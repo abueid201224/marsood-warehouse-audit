@@ -66,6 +66,8 @@ function describe(result: ScanResult): Feedback | null {
       return { tone: "warning", title: "امسح رقم الطلب أولاً", body: `لا توجد فاتورة مفتوحة، والكود ${result.code} ليس رقم طلب معروفاً.` };
     case "blocked":
       return { tone: "danger", title: "أكمل الفاتورة الحالية أولاً", body: `لا يمكن بدء مسح جديد (${result.code}) قبل انتهاء الفاتورة ${result.orderNo} واكتمالها؛ ينقصها ${result.shortItems} صنف. أكمل مسحها أو رحّلها لاستكمال النواقص.` };
+    case "confirm-switch":
+      return { tone: "warning", title: "أكّد الانتقال لفاتورة جديدة", body: `الفاتورة ${result.currentNo} مفتوحة. امسح ${result.targetNo} مرة ثانية خلال ثانيتين لإغلاقها وبدء الجديدة.` };
     case "already-closed":
       return { tone: "warning", title: "فاتورة سبق مراجعتها", body: `الطلب ${result.orderNo} منتهي سابقاً. اختر إعادة فتحه أو التخطي.` };
     case "locked":
@@ -76,7 +78,8 @@ function describe(result: ScanResult): Feedback | null {
 function alertKindOf(result: ScanResult): AlertKind | null {
   switch (result.type) {
     case "item": return result.kind === "wrong" ? "wrong" : result.kind === "over" ? "over" : null;
-    case "blocked": return "blocked";
+    case "blocked":
+    case "confirm-switch": return "blocked";
     case "already-closed": return "closed";
     case "order-not-found":
     case "not-today":
@@ -108,6 +111,7 @@ export default function ScanScreen() {
   const [busy, setBusy] = useState(false);
   const [printEnabled, setPrintEnabled] = useState(true);
   const [soundOn, setSoundOn] = useState(true);
+  const [safeSwitch, setSafeSwitch] = useState(false);
   const [errorCodes, setErrorCodes] = useState<ErrorCode[]>([]);
   const [closedPrompt, setClosedPrompt] = useState<{ orderKey: string; orderNo: string } | null>(null);
   const [printRows, setPrintRows] = useState<PrintLogRow[]>([]);
@@ -117,12 +121,22 @@ export default function ScanScreen() {
     if (!engine) return;
     engine.getPrintConfig().then((cfg) => setPrintEnabled(cfg.enabled)).catch(() => undefined);
     engine.getSetting("sound_enabled").then((value) => setSoundOn(value !== "0")).catch(() => undefined);
+    engine.getSetting("safe_switch").then((value) => setSafeSwitch(value === "1")).catch(() => undefined);
   }, [engine, focused]);
 
   // تشغيل الطابور في الخلفية كلما وُجدت مهام منتظرة (الطباعة الصامتة لا تعطّل المسح)
   useEffect(() => {
     if (engine && (printSummary?.pending ?? 0) > 0) kickPrintQueue(engine);
   }, [engine, printSummary?.pending]);
+
+  async function toggleSafeSwitch(value: boolean) {
+    if (!engine) return;
+    setSafeSwitch(value);
+    await engine.setSetting("safe_switch", value ? "1" : "0");
+    setFeedback(value
+      ? { tone: "info", title: "وضع أمان التبديل مفعّل", body: "عند مسح فاتورة جديدة أثناء وجود فاتورة مفتوحة، امسحها مرتين خلال ثانيتين للتأكيد." }
+      : { tone: "info", title: "وضع أمان التبديل معطّل", body: "مسح فاتورة جديدة يغلق الحالية فوراً (الوضع القياسي)." });
+  }
 
   async function toggleSound() {
     if (!engine) return;
@@ -289,6 +303,11 @@ export default function ScanScreen() {
         <MaterialCommunityIcons name={soundOn ? "volume-high" : "volume-off"} size={22} color={soundOn ? palette.tealDeep : palette.muted} />
         <Text style={[styles.printText, { color: soundOn ? palette.tealDeep : palette.muted }]}>{soundOn ? "التنبيهات الصوتية للأخطاء: مفعّلة" : "التنبيهات الصوتية: صامتة"}</Text>
       </Pressable>
+      <View style={styles.printBar}>
+        <Switch value={safeSwitch} onValueChange={toggleSafeSwitch} trackColor={{ true: palette.teal, false: palette.line }} accessibilityLabel="وضع أمان التبديل بين الفواتير" />
+        <MaterialCommunityIcons name={safeSwitch ? "shield-check" : "shield-off-outline"} size={20} color={safeSwitch ? palette.tealDeep : palette.muted} />
+        <Text style={[styles.printText, { color: safeSwitch ? palette.tealDeep : palette.muted }]}>{safeSwitch ? "أمان التبديل: مسح مزدوج للفاتورة الجديدة" : "أمان التبديل: معطّل (انتقال فوري)"}</Text>
+      </View>
       {feedback ? <Notice title={feedback.title} body={feedback.body} tone={tone} /> : null}
 
       {!invoice ? (
