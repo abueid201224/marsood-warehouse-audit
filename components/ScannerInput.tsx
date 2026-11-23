@@ -155,5 +155,5 @@ const styles = StyleSheet.create({
   input: { flex: 1, color: palette.ink, fontSize: 20, fontWeight: "800", paddingVertical: 14, textAlign: "right", writingDirection: "ltr" },
   submit: { width: 40, height: 40, borderRadius: 12, backgroundColor: palette.teal, alignItems: "center", justifyContent: "center" },
   keyboardToggle: { width: 40, height: 40, alignItems: "center", justifyContent: "center" },
-  caption: { color: palette.muted, fontSize: 11, textAlign: "right" },
+  caption: { color: palette.muted, fontSize: 14, textAlign: "right" },
 });

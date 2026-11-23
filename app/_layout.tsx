@@ -22,7 +22,7 @@ export function ErrorBoundary({ error, retry }: { error: Error; retry: () => voi
   return (
     <View style={{ flex: 1, alignItems: "center", justifyContent: "center", gap: 14, padding: 24, backgroundColor: palette.background }}>
       <Text style={{ color: palette.ink, fontSize: 20, fontWeight: "900", textAlign: "center" }}>حدث خطأ غير متوقع</Text>
-      <Text style={{ color: palette.muted, fontSize: 14, textAlign: "center" }}>سُجّل العطل في سجل الأعطال (للمشرف). بياناتك المحفوظة سليمة.</Text>
+      <Text style={{ color: palette.muted, fontSize: 15, textAlign: "center" }}>سُجّل العطل في سجل الأعطال (للمشرف). بياناتك المحفوظة سليمة.</Text>
       <Pressable onPress={retry} accessibilityRole="button" style={{ minHeight: 50, borderRadius: 14, backgroundColor: "#0B3B4A", paddingHorizontal: 24, alignItems: "center", justifyContent: "center" }}>
         <Text style={{ color: "#FFFFFF", fontWeight: "800", fontSize: 16 }}>إعادة المحاولة</Text>
       </Pressable>

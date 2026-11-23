@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { useRouter } from "expo-router";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import * as DocumentPicker from "expo-document-picker";
 import * as LegacyFileSystem from "expo-file-system/legacy";
 import { File } from "expo-file-system";
@@ -109,6 +109,9 @@ function ColumnSelect({ label, required, value, headers, onChange }: { label: st
 
 export default function ImportScreen() {
   const router = useRouter();
+  const { mode } = useLocalSearchParams<{ mode?: string }>();
+  const autoRan = useRef(false);
+  const [ready, setReady] = useState(false);
   const { engine, error: engineError } = useEngine();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -134,9 +137,19 @@ export default function ImportScreen() {
       setFolder(savedFolder || null);
       setProcessed(parseProcessed(savedProcessed));
       setLastSync((await engine.getSetting("sync:last")) ?? "");
+      setReady(true);
     })().catch(() => undefined);
     return () => { alive = false; };
   }, [engine]);
+
+  // يفتح من زرّي «مزامنة» و«استيراد ملف جديد» في شاشة التدقيق: ينفّذ الإجراء المطلوب مرة واحدة
+  useEffect(() => {
+    if (!ready || autoRan.current) return;
+    autoRan.current = true;
+    if (mode === "file") void chooseFile();
+    else if (mode === "sync") void syncNow(folder);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready]);
 
   const parsed = useMemo(() => (preview && map ? mapRows(preview, map) : null), [preview, map]);
   const stats = useMemo(() => {
@@ -447,38 +460,38 @@ export default function ImportScreen() {
 
 const styles = StyleSheet.create({
   backButton: { flexDirection: "row", alignItems: "center", gap: 4, padding: 8 },
-  backText: { color: palette.ink, fontWeight: "800", fontSize: 13 },
+  backText: { color: palette.ink, fontWeight: "800", fontSize: 15 },
   syncCard: { alignItems: "center", gap: 14, padding: 18, borderRadius: 18, borderWidth: 1, borderColor: "#CBD5E1", backgroundColor: "#FFFFFF" },
   fileOption: { alignSelf: "stretch", minHeight: 48, flexDirection: "row", alignItems: "center", gap: 10, borderBottomWidth: 1, borderBottomColor: "#E2E8F0", paddingHorizontal: 6 },
-  fileOptionName: { flex: 1, color: "#0F172A", fontSize: 14, fontWeight: "700", textAlign: "right" },
-  fileState: { color: "#047857", fontSize: 12, fontWeight: "800", width: 52 },
+  fileOptionName: { flex: 1, color: "#0F172A", fontSize: 15, fontWeight: "700", textAlign: "right" },
+  fileState: { color: "#047857", fontSize: 14, fontWeight: "800", width: 52 },
   pickCard: { minHeight: 270, alignItems: "center", justifyContent: "center", paddingHorizontal: 24 },
   pickIcon: { width: 68, height: 68, borderRadius: 23, backgroundColor: palette.tealPale, alignItems: "center", justifyContent: "center" },
   pickTitle: { color: palette.ink, fontSize: 19, fontWeight: "900" },
-  pickBody: { color: palette.muted, fontSize: 13, lineHeight: 21, textAlign: "center", maxWidth: 520 },
+  pickBody: { color: palette.muted, fontSize: 15, lineHeight: 21, textAlign: "center", maxWidth: 520 },
   fileRow: { flexDirection: "row", alignItems: "center", gap: 12 },
-  fileTitle: { color: palette.ink, fontWeight: "900", fontSize: 14, textAlign: "right" },
-  fileMeta: { color: palette.muted, fontSize: 11, textAlign: "right", marginTop: 4 },
+  fileTitle: { color: palette.ink, fontWeight: "900", fontSize: 15, textAlign: "right" },
+  fileMeta: { color: palette.muted, fontSize: 14, textAlign: "right", marginTop: 4 },
   columnsGrid: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
   columnSelect: { flexDirection: "row", alignItems: "center", gap: 8, borderWidth: 1, borderColor: palette.line, backgroundColor: palette.surfaceMuted, minWidth: 190, flexGrow: 1, borderRadius: 13, padding: 12 },
-  columnLabel: { color: palette.muted, fontSize: 11, textAlign: "right", fontWeight: "700" },
-  columnValue: { color: palette.ink, fontSize: 14, textAlign: "right", fontWeight: "800", marginTop: 3 },
+  columnLabel: { color: palette.muted, fontSize: 14, textAlign: "right", fontWeight: "700" },
+  columnValue: { color: palette.ink, fontSize: 15, textAlign: "right", fontWeight: "800", marginTop: 3 },
   sheetChip: { borderColor: palette.line, borderWidth: 1, borderRadius: 999, paddingHorizontal: 14, paddingVertical: 9, backgroundColor: palette.surfaceMuted },
   sheetActive: { backgroundColor: palette.ink, borderColor: palette.ink },
-  sheetText: { color: palette.inkSoft, fontSize: 12, fontWeight: "800" },
+  sheetText: { color: palette.inkSoft, fontSize: 14, fontWeight: "800" },
   sheetTextActive: { color: palette.white },
   previewTable: { borderWidth: 1, borderColor: palette.line, borderRadius: 14, overflow: "hidden" },
   previewHead: { flexDirection: "row", gap: 8, padding: 10, backgroundColor: palette.surfaceMuted, borderBottomWidth: 1, borderBottomColor: palette.line },
   previewHeadText: { color: palette.ink, fontWeight: "900" },
   previewRow: { flexDirection: "row", gap: 8, padding: 10, borderBottomWidth: 1, borderBottomColor: palette.line },
-  previewCell: { flex: 1, color: palette.text, fontSize: 12, textAlign: "right" },
+  previewCell: { flex: 1, color: palette.text, fontSize: 14, textAlign: "right" },
   errorsBox: { backgroundColor: palette.amberPale, borderRadius: 12, padding: 12, gap: 4 },
-  errorsTitle: { color: palette.amber, fontWeight: "900", fontSize: 13, textAlign: "right" },
-  errorLine: { color: palette.inkSoft, fontSize: 12, textAlign: "right" },
+  errorsTitle: { color: palette.amber, fontWeight: "900", fontSize: 15, textAlign: "right" },
+  errorLine: { color: palette.inkSoft, fontSize: 14, textAlign: "right" },
   modalShade: { flex: 1, backgroundColor: "rgba(17,35,62,0.48)", justifyContent: "center", alignItems: "center", padding: 24 },
   pickerModal: { width: "100%", maxWidth: 520, backgroundColor: palette.surface, borderRadius: 20, padding: 18, gap: 14 },
   modalTitle: { color: palette.ink, fontSize: 17, fontWeight: "900", textAlign: "right" },
   optionRow: { minHeight: 48, borderBottomWidth: 1, borderBottomColor: palette.line, flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: 10, paddingHorizontal: 8 },
-  optionText: { color: palette.ink, fontSize: 14, textAlign: "right", flex: 1 },
-  optionIndex: { color: palette.muted, fontSize: 12, width: 22, textAlign: "left" },
+  optionText: { color: palette.ink, fontSize: 15, textAlign: "right", flex: 1 },
+  optionIndex: { color: palette.muted, fontSize: 14, width: 22, textAlign: "left" },
 });

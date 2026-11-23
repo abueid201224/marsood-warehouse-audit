@@ -55,5 +55,5 @@ export function PrintAlert({ engine }: { engine: AuditEngine | null }) {
 
 const styles = StyleSheet.create({
   wrap: { gap: 8 },
-  line: { color: palette.inkSoft, fontSize: 12, textAlign: "right" },
+  line: { color: palette.inkSoft, fontSize: 14, textAlign: "right" },
 });

@@ -55,6 +55,6 @@ export default function DiagnosticsScreen() {
 }
 
 const styles = StyleSheet.create({
-  head: { color: palette.muted, fontSize: 12, textAlign: "right" },
-  msg: { color: palette.ink, fontSize: 14, textAlign: "right" },
+  head: { color: palette.muted, fontSize: 14, textAlign: "right" },
+  msg: { color: palette.ink, fontSize: 15, textAlign: "right" },
 });

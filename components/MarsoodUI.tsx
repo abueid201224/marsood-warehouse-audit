@@ -77,7 +77,7 @@ export function Button({
   disabled?: boolean;
   compact?: boolean;
 }) {
-  const color = variant === "primary" || variant === "success" ? palette.white : variant === "danger" ? palette.red : palette.ink;
+  const color = variant === "outline" ? palette.ink : palette.white;
   return (
     <Pressable
       accessibilityRole="button"
@@ -94,12 +94,15 @@ export function Button({
         // ألوان صريحة مضمونة الظهور (بعض شاشات سامسونج تُخفي الألوان المعتمدة على السمات)
         variant === "primary" && { backgroundColor: "#0B3B4A", borderWidth: 2, borderColor: "#0B3B4A" },
         variant === "success" && { backgroundColor: "#047857", borderWidth: 2, borderColor: "#047857" },
+        variant === "secondary" && { backgroundColor: "#0D635C", borderWidth: 2, borderColor: "#0D635C" },
+        variant === "outline" && { backgroundColor: "#FFFFFF", borderWidth: 2, borderColor: "#0B3B4A" },
+        variant === "danger" && { backgroundColor: "#B42318", borderWidth: 2, borderColor: "#B42318" },
         disabled && styles.buttonDisabled,
         pressed && !disabled && { opacity: 0.82, transform: [{ scale: 0.99 }] },
       ]}
     >
       {icon ? <MaterialCommunityIcons name={icon} size={compact ? 18 : 20} color={color} /> : null}
-      <Text style={[styles.buttonText, { color }, compact && { fontSize: 13 }]}>{title}</Text>
+      <Text style={[styles.buttonText, { color }, compact && { fontSize: 15 }]}>{title}</Text>
     </Pressable>
   );
 }
@@ -185,10 +188,10 @@ const styles = StyleSheet.create({
   header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 14, paddingBottom: 2 },
   headerTitle: { flex: 1, flexDirection: "row", alignItems: "center", gap: 12 },
   headerHeading: { color: palette.ink, fontSize: 24, fontWeight: "800", textAlign: "right" },
-  headerSub: { color: palette.muted, fontSize: 13, lineHeight: 20, textAlign: "right", marginTop: 3 },
+  headerSub: { color: palette.muted, fontSize: 15, lineHeight: 20, textAlign: "right", marginTop: 3 },
   sectionTitle: { flexDirection: "row", alignItems: "center", gap: 12, marginTop: 3 },
   sectionHeading: { color: palette.ink, fontSize: 17, fontWeight: "800", textAlign: "right" },
-  sectionHint: { color: palette.muted, fontSize: 12, textAlign: "right", marginTop: 3 },
+  sectionHint: { color: palette.muted, fontSize: 14, textAlign: "right", marginTop: 3 },
   card: { backgroundColor: palette.surface, borderRadius: 20, padding: 18, borderWidth: 1, borderColor: palette.line, gap: 14 },
   button: { minHeight: 48, borderRadius: 14, paddingHorizontal: 16, paddingVertical: 12, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 9 },
   buttonCompact: { minHeight: 38, paddingVertical: 8, paddingHorizontal: 12, borderRadius: 12 },
@@ -197,20 +200,20 @@ const styles = StyleSheet.create({
   buttonOutline: { backgroundColor: palette.surface, borderColor: palette.line, borderWidth: 1 },
   buttonDanger: { backgroundColor: palette.redPale, borderColor: "#E8C6C2", borderWidth: 1 },
   buttonDisabled: { opacity: 0.48 },
-  buttonText: { fontWeight: "800", fontSize: 15, textAlign: "center" },
+  buttonText: { fontWeight: "800", fontSize: 16, textAlign: "center" },
   badge: { flexDirection: "row", alignItems: "center", alignSelf: "flex-start", gap: 5, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 6 },
-  badgeText: { fontSize: 11, fontWeight: "800" },
+  badgeText: { fontSize: 14, fontWeight: "800" },
   notice: { flexDirection: "row", alignItems: "flex-start", gap: 10, borderRadius: 15, paddingHorizontal: 14, paddingVertical: 12 },
-  noticeTitle: { fontWeight: "800", fontSize: 13, textAlign: "right" },
-  noticeBody: { color: palette.inkSoft, fontSize: 12, lineHeight: 19, marginTop: 3, textAlign: "right" },
+  noticeTitle: { fontWeight: "800", fontSize: 15, textAlign: "right" },
+  noticeBody: { color: palette.inkSoft, fontSize: 14, lineHeight: 19, marginTop: 3, textAlign: "right" },
   metric: { flex: 1, minWidth: 126, backgroundColor: palette.surfaceMuted, borderRadius: 15, padding: 14, borderWidth: 1, borderColor: palette.line },
   metricTop: { flexDirection: "row", alignItems: "center", gap: 7 },
-  metricLabel: { flex: 1, color: palette.muted, textAlign: "right", fontSize: 12, fontWeight: "700" },
+  metricLabel: { flex: 1, color: palette.muted, textAlign: "right", fontSize: 14, fontWeight: "700" },
   metricValue: { fontSize: 24, fontWeight: "900", marginTop: 10, textAlign: "right" },
   barTrack: { height: 10, borderRadius: 6, backgroundColor: palette.line, overflow: "hidden" },
   barFill: { height: 10, borderRadius: 6 },
   empty: { alignItems: "center", justifyContent: "center", paddingHorizontal: 18, paddingVertical: 26, gap: 9 },
   emptyIcon: { width: 58, height: 58, borderRadius: 19, backgroundColor: palette.tealPale, alignItems: "center", justifyContent: "center", marginBottom: 4 },
   emptyTitle: { color: palette.ink, fontSize: 16, fontWeight: "800", textAlign: "center" },
-  emptyBody: { color: palette.muted, fontSize: 13, lineHeight: 21, textAlign: "center", maxWidth: 470 },
+  emptyBody: { color: palette.muted, fontSize: 15, lineHeight: 21, textAlign: "center", maxWidth: 470 },
 });

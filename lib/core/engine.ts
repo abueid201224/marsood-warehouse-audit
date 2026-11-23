@@ -130,6 +130,13 @@ export interface UnknownScanRow {
   code: string;
   at: string;
 }
+export interface SessionStatus {
+  status: "idle" | "active" | "ended";
+  id: string;
+  startedAt: string;
+  endedAt: string | null;
+}
+
 export interface SessionInfo {
   id: string;
   startedAt: string;
@@ -567,13 +574,72 @@ export class AuditEngine {
       this.tx(async () => {
         await this.requireSession("supervisor");
         await this.audit("reset", null, "مسح كل بيانات الجلسة");
-        for (const table of ["scans", "invoice_state", "lines", "imports", "print_jobs"]) {
-          await this.db.run(`DELETE FROM ${table}`);
+        await this.wipeSessionData();
+      }),
+    );
+  }
+
+  private async wipeSessionData(): Promise<void> {
+    for (const table of ["scans", "invoice_state", "lines", "imports", "print_jobs"]) {
+      await this.db.run(`DELETE FROM ${table}`);
+    }
+    // الإعدادات (الطابعات، المجلد، المراجع) وفهرس PDF يبقيان؛ يُمسح فقط مؤشر الفاتورة الحالية
+    await this.db.run("DELETE FROM app_state WHERE key IN ('current_order', 'session_id', 'session_started', 'session_checkpoint', 'setting:session_approval', 'setting:session_status', 'setting:session_ended')");
+    this.auditSession.clearPending();
+    await this.readSessionInfo(true);
+  }
+
+  /** حالة دورة الجلسة: idle (لم تبدأ) / active / ended (بعد الاعتماد وإنهاء الجلسة). بيانات قديمة بلا حالة تُعدّ نشطة. */
+  sessionStatus(): Promise<SessionStatus> {
+    return this.enqueue(() => this.readSessionStatus());
+  }
+
+  private async readSessionStatus(): Promise<SessionStatus> {
+    const raw = await this.readSetting("session_status");
+    const info = await this.readSessionInfo(false);
+    let status: SessionStatus["status"];
+    if (raw === "active" || raw === "ended" || raw === "idle") status = raw;
+    else {
+      const [row] = await this.db.all<{ n: number }>("SELECT COUNT(*) AS n FROM lines");
+      status = (row?.n ?? 0) > 0 ? "active" : "idle";
+    }
+    return { status, id: info.id, startedAt: info.startedAt, endedAt: (await this.readSetting("session_ended")) || null };
+  }
+
+  /** بدء جلسة: من الحالة idle مباشرة، أو من ended بعد مسح بيانات الجلسة السابقة (يُنصح بنسخة احتياطية قبلها). */
+  startSession(): Promise<SessionStatus> {
+    return this.enqueue(() =>
+      this.tx(async () => {
+        await this.requireSession();
+        const current = await this.readSessionStatus();
+        if (current.status === "active") throw new Error("الجلسة الحالية نشطة؛ أنهِها بعد الاعتماد أولاً.");
+        if (current.status === "ended") {
+          await this.requireSession("supervisor");
+          await this.wipeSessionData();
+        } else {
+          await this.db.run("DELETE FROM app_state WHERE key IN ('session_id', 'session_started', 'session_checkpoint')");
         }
-        // الإعدادات (الطابعات، المجلد، المراجع) وفهرس PDF يبقيان؛ يُمسح فقط مؤشر الفاتورة الحالية
-        await this.db.run("DELETE FROM app_state WHERE key IN ('current_order', 'session_id', 'session_started', 'session_checkpoint', 'setting:session_approval')");
-        this.auditSession.clearPending();
-        await this.readSessionInfo(true);
+        const info = await this.readSessionInfo(true);
+        await this.db.run("INSERT OR REPLACE INTO app_state (key, value) VALUES ('setting:session_status', 'active')");
+        await this.audit("session-start", info.id, "بدء جلسة");
+        return this.readSessionStatus();
+      }),
+    );
+  }
+
+  /** إنهاء الجلسة: يتطلب انتهاء كل الفواتير واعتماد التقرير. تبقى البيانات والتقارير للاطلاع. */
+  endSession(): Promise<SessionStatus> {
+    return this.enqueue(() =>
+      this.tx(async () => {
+        await this.requireSession();
+        const current = await this.readSessionStatus();
+        if (current.status !== "active") throw new Error("لا توجد جلسة نشطة.");
+        const stats = await this.readStats();
+        if (stats.remaining > 0) throw new Error(`متبقٍ ${stats.remaining} فاتورة؛ لا يمكن إنهاء الجلسة.`);
+        if (!(await this.readApproval())) throw new Error("اعتمد تقرير الجلسة أولاً.");
+        await this.db.run("INSERT OR REPLACE INTO app_state (key, value) VALUES ('setting:session_status', 'ended'), ('setting:session_ended', ?)", [this.now()]);
+        await this.audit("session-end", current.id, "إنهاء الجلسة");
+        return this.readSessionStatus();
       }),
     );
   }
@@ -1095,8 +1161,8 @@ export class AuditEngine {
   }
 
   /** ملخص الجلسة الخفيف لشريط التقدم الشامل في شاشة المسح. */
-  sessionSummary(): Promise<{ stats: Stats; totals: SessionTotals }> {
-    return this.enqueue(async () => ({ stats: await this.readStats(), totals: await this.readSessionTotals() }));
+  sessionSummary(): Promise<{ stats: Stats; totals: SessionTotals; approved: boolean }> {
+    return this.enqueue(async () => ({ stats: await this.readStats(), totals: await this.readSessionTotals(), approved: (await this.readApproval()) !== null }));
   }
 
   private async readApproval(): Promise<SessionApproval | null> {

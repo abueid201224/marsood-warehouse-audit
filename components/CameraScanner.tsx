@@ -56,9 +56,9 @@ export function CameraScanner({ onScan, active }: { onScan: (code: string) => vo
 
 const styles = StyleSheet.create({
   box: { alignItems: "center", gap: 10, padding: 18, borderRadius: 16, borderWidth: 1, borderColor: palette.line, backgroundColor: "#FFFFFF" },
-  text: { color: palette.muted, fontSize: 14, lineHeight: 21, textAlign: "center" },
+  text: { color: palette.muted, fontSize: 15, lineHeight: 21, textAlign: "center" },
   button: { minHeight: 46, borderRadius: 12, backgroundColor: "#0B3B4A", paddingHorizontal: 18, alignItems: "center", justifyContent: "center" },
-  buttonText: { color: "#FFFFFF", fontWeight: "800", fontSize: 15 },
+  buttonText: { color: "#FFFFFF", fontWeight: "800", fontSize: 16 },
   camera: { height: 220, borderRadius: 16, overflow: "hidden", backgroundColor: "#000000", alignItems: "center", justifyContent: "center" },
   frame: { width: "78%", height: 110, borderWidth: 3, borderColor: "#34D399", borderRadius: 12 },
   torch: { position: "absolute", top: 10, end: 10, width: 40, height: 40, borderRadius: 20, backgroundColor: "rgba(0,0,0,0.55)", alignItems: "center", justifyContent: "center" },

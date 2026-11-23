@@ -41,7 +41,7 @@ export default function AuditScreen() {
 
 const styles = StyleSheet.create({
   line: { flexDirection: "row", justifyContent: "space-between", gap: 10 },
-  event: { color: palette.ink, fontWeight: "900", fontSize: 15 },
-  time: { color: palette.muted, fontSize: 12 },
-  meta: { color: palette.inkSoft, fontSize: 13, textAlign: "right" },
+  event: { color: palette.ink, fontWeight: "900", fontSize: 16 },
+  time: { color: palette.muted, fontSize: 14 },
+  meta: { color: palette.inkSoft, fontSize: 15, textAlign: "right" },
 });

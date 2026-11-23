@@ -32,8 +32,8 @@ const styles = StyleSheet.create({
   sheet: { width: "100%", maxWidth: 520, backgroundColor: palette.surface, borderRadius: 22, padding: 20, gap: 12 },
   icon: { width: 56, height: 56, borderRadius: 19, backgroundColor: palette.tealPale, alignItems: "center", justifyContent: "center", alignSelf: "center" },
   title: { color: palette.ink, fontSize: 18, fontWeight: "900", textAlign: "center" },
-  body: { color: palette.inkSoft, fontSize: 13, lineHeight: 21, textAlign: "right" },
+  body: { color: palette.inkSoft, fontSize: 15, lineHeight: 21, textAlign: "right" },
   sources: { gap: 4, backgroundColor: palette.surfaceMuted, borderRadius: 12, padding: 12 },
-  source: { color: palette.ink, fontSize: 13, fontWeight: "700", textAlign: "right" },
-  hint: { color: palette.muted, fontSize: 12, lineHeight: 19, textAlign: "right" },
+  source: { color: palette.ink, fontSize: 15, fontWeight: "700", textAlign: "right" },
+  hint: { color: palette.muted, fontSize: 14, lineHeight: 19, textAlign: "right" },
 });

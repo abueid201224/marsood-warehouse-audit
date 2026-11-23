@@ -142,10 +142,10 @@ export function AdminPanel({ engine, session }: { engine: AuditEngine; session: 
 
 const styles = StyleSheet.create({
   row: { flexDirection: "row", alignItems: "center", gap: 10, borderBottomWidth: 1, borderBottomColor: palette.line, paddingVertical: 8 },
-  opName: { flex: 1, color: palette.ink, fontSize: 15, fontWeight: "700", textAlign: "right" },
+  opName: { flex: 1, color: palette.ink, fontSize: 16, fontWeight: "700", textAlign: "right" },
   link: { paddingHorizontal: 8, paddingVertical: 6 },
-  linkText: { color: palette.blue, fontWeight: "800", fontSize: 13 },
-  input: { borderWidth: 1, borderColor: palette.line, backgroundColor: "#FFFFFF", borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10, color: palette.ink, fontSize: 15 },
+  linkText: { color: palette.blue, fontWeight: "800", fontSize: 15 },
+  input: { borderWidth: 1, borderColor: palette.line, backgroundColor: "#FFFFFF", borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10, color: palette.ink, fontSize: 16 },
   check: { paddingVertical: 6 },
-  sub: { color: palette.muted, fontSize: 13, lineHeight: 20, textAlign: "right" },
+  sub: { color: palette.muted, fontSize: 15, lineHeight: 20, textAlign: "right" },
 });

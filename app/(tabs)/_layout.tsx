@@ -1,24 +1,24 @@
 import { useEffect, useState } from "react";
+import { View } from "react-native";
 import { Tabs } from "expo-router";
 import { LoginGate } from "@/components/LoginGate";
+import { Sidebar } from "@/components/Sidebar";
 import { useEngine } from "@/lib/core/hooks";
 import { startPrintWatchdog } from "@/lib/print/runtime";
 import { backupQuietly } from "@/lib/backup/files";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useLayout } from "@/lib/layout";
-import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { palette } from "@/lib/palette";
 
 export default function TabLayout() {
-  const insets = useSafeAreaInsets();
-  const { isWide } = useLayout();
-  // الارتفاع يُحسب من حافة النظام السفلية (شريط الإيماءات/الأزرار) فلا تتداخل الأزرار مع التبويبات
-  const bottom = Math.max(insets.bottom, 8);
   const { engine } = useEngine();
   const [signedIn, setSignedIn] = useState(false);
+  const [userName, setUserName] = useState("");
   useEffect(() => {
     if (!engine) return;
-    const sync = () => setSignedIn(engine.getSession() !== null);
+    const sync = () => {
+      const session = engine.getSession();
+      setSignedIn(session !== null);
+      setUserName(session?.name ?? "");
+    };
     sync();
     return engine.subscribeSession(sync);
   }, [engine]);
@@ -27,30 +27,24 @@ export default function TabLayout() {
   }, [engine, signedIn]);
   useEffect(() => (engine && signedIn ? startPrintWatchdog(engine) : undefined), [engine, signedIn]);
   if (!engine) return null;
-  if (!signedIn) return <LoginGate engine={engine} />;
   return (
-    <Tabs
-      screenOptions={{
-        headerShown: false,
-        tabBarActiveTintColor: palette.tealDeep,
-        tabBarInactiveTintColor: palette.subtle,
-        tabBarLabelPosition: isWide ? "beside-icon" : "below-icon",
-        tabBarLabelStyle: { fontSize: isWide ? 14 : 11, fontWeight: "700", marginTop: 1 },
-        tabBarStyle: {
-          backgroundColor: palette.surface,
-          borderTopColor: palette.line,
-          borderTopWidth: 1,
-          height: (isWide ? 60 : 56) + bottom,
-          paddingTop: 7,
-          paddingBottom: bottom,
-        },
-      }}
-    >
-      <Tabs.Screen name="index" options={{ title: "لوحة العمل", tabBarIcon: ({ color, size }) => <MaterialCommunityIcons name="warehouse" color={color} size={size} /> }} />
-      <Tabs.Screen name="scan" options={{ title: "المسح", tabBarIcon: ({ color, size }) => <MaterialCommunityIcons name="barcode-scan" color={color} size={size} /> }} />
-      <Tabs.Screen name="invoices" options={{ title: "الفواتير", tabBarIcon: ({ color, size }) => <MaterialCommunityIcons name="clipboard-list-outline" color={color} size={size} /> }} />
-      <Tabs.Screen name="report" options={{ title: "التقرير", tabBarIcon: ({ color, size }) => <MaterialCommunityIcons name="file-document-outline" color={color} size={size} /> }} />
-      <Tabs.Screen name="settings" options={{ title: "الإعدادات", tabBarIcon: ({ color, size }) => <MaterialCommunityIcons name="cog-outline" color={color} size={size} /> }} />
-    </Tabs>
+    <View style={{ flex: 1, flexDirection: "row", backgroundColor: palette.background }}>
+      <Sidebar signedIn={signedIn} userName={userName} onLogout={() => void engine.logout()} />
+      <View style={{ flex: 1 }}>
+        {signedIn ? (
+          // شريط التبويبات الافتراضي مخفي: التنقل عبر القائمة الجانبية
+          <Tabs initialRouteName="account" screenOptions={{ headerShown: false, tabBarStyle: { display: "none" } }}>
+            <Tabs.Screen name="account" options={{ title: "الدخول والحساب" }} />
+            <Tabs.Screen name="index" options={{ title: "لوحة العمل" }} />
+            <Tabs.Screen name="scan" options={{ title: "التدقيق" }} />
+            <Tabs.Screen name="invoices" options={{ title: "الفواتير" }} />
+            <Tabs.Screen name="report" options={{ title: "التقارير" }} />
+            <Tabs.Screen name="settings" options={{ title: "الإعدادات" }} />
+          </Tabs>
+        ) : (
+          <LoginGate engine={engine} />
+        )}
+      </View>
+    </View>
   );
 }

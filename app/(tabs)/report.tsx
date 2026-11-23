@@ -3,7 +3,7 @@ import { Share, StyleSheet, Text, TextInput, View } from "react-native";
 import { useFocusEffect } from "expo-router";
 import * as Print from "expo-print";
 import { Button, Card, EmptyState, Header, Metric, Notice, ProgressBar, Screen, SectionTitle } from "@/components/MarsoodUI";
-import type { ErrorReport } from "@/lib/core/engine";
+import type { ErrorReport, SessionStatus } from "@/lib/core/engine";
 import { formatDateTime } from "@/lib/core/format";
 import { useEngine } from "@/lib/core/hooks";
 import { buildReportHtml, reportToText } from "@/lib/core/report";
@@ -17,9 +17,11 @@ export default function ReportScreen() {
   const [message, setMessage] = useState("");
   const [details, setDetails] = useState(false);
   const [approver, setApprover] = useState("");
+  const [sessionState, setSessionState] = useState<SessionStatus | null>(null);
 
   const load = useCallback(() => {
     if (!engine) return;
+    engine.sessionStatus().then(setSessionState).catch(() => undefined);
     engine.errorReport().then((value) => { setReport(value); setMessage(""); }).catch((cause: unknown) => setMessage(cause instanceof Error ? cause.message : "تعذر إعداد التقرير."));
   }, [engine]);
   useFocusEffect(load);
@@ -53,6 +55,17 @@ export default function ReportScreen() {
       setMessage(`تعذر الحفظ: ${cause instanceof Error ? cause.message : "خطأ غير معروف"}`);
     } finally {
       setExporting(false);
+    }
+  }
+
+  async function endSession() {
+    if (!engine) return;
+    try {
+      await engine.endSession();
+      setSaved("انتهت الجلسة. التقارير متاحة للاطلاع والتصدير؛ ابدأ جلسة جديدة من تبويب التدقيق.");
+      load();
+    } catch (cause) {
+      setMessage(cause instanceof Error ? cause.message : "تعذر إنهاء الجلسة.");
     }
   }
 
@@ -105,7 +118,10 @@ export default function ReportScreen() {
           <Card>
             <SectionTitle title="اعتماد التقرير" hint="مرة واحدة بعد انتهاء كل الفواتير" />
             {report.approval ? (
-              <Notice title="تقرير معتمد" body={`اعتُمد بواسطة ${report.approval.name} في ${formatDateTime(report.approval.at)}.`} tone="success" />
+              <>
+                <Notice title="تقرير معتمد" body={`اعتُمد بواسطة ${report.approval.name} في ${formatDateTime(report.approval.at)}.`} tone="success" />
+                {sessionState?.status === "active" ? <Button title="إنهاء الجلسة" icon="flag-checkered" variant="danger" onPress={() => void endSession()} /> : sessionState?.status === "ended" ? <Notice title="الجلسة منتهية" body="التقارير للاطلاع والتصدير. تبدأ جلسة جديدة من تبويب التدقيق." tone="info" /> : null}
+              </>
             ) : report.stats.remaining > 0 ? (
               <Notice title="لم تنتهِ الجلسة" body={`متبقٍ ${report.stats.remaining} فاتورة؛ يُفتح الاعتماد بعد انتهاء جميعها.`} tone="info" />
             ) : (
@@ -115,6 +131,8 @@ export default function ReportScreen() {
               </>
             )}
           </Card>
+          {!report.approval ? <Notice title="التقارير التفصيلية مقفلة" body="الاطلاع على التفاصيل وطباعة التقارير وتصديرها يُفتح بعد اعتماد تقرير الجلسة." tone="warning" icon="lock-outline" /> : (
+          <>
           <View style={styles.metrics}>
             <Metric label="أخطاء تجهيز" value={String(wrongTotal)} icon="close-octagon-outline" accent={wrongTotal ? palette.red : palette.tealDeep} />
             <Metric label="تجهيز زائد" value={String(overTotal)} icon="plus-circle-outline" accent={overTotal ? palette.amber : palette.tealDeep} />
@@ -142,6 +160,8 @@ export default function ReportScreen() {
           <Section title="سجل الطباعة الصامتة" hint="حالة طباعة الفاتورة والبوليصة لكل طلب منتهٍ" empty="لم تُنفَّذ مهام طباعة." rows={report.printLog.map((r) => `طلب ${r.orderNo} • ${PRINT_KIND_LABELS[r.kind]}: ${PRINT_STATUS_LABELS[r.status]}${r.detail ? ` — ${r.detail}` : ""}`)} color={palette.blue} />
           </>
           ) : null}
+          </>
+          )}
         </>
       ) : null}
     </Screen>
@@ -164,7 +184,7 @@ const styles = StyleSheet.create({
   metrics: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
   actions: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
   action: { flexGrow: 1, minWidth: 180 },
-  row: { color: palette.text, fontSize: 13, textAlign: "right", borderRightWidth: 3, paddingRight: 10, paddingVertical: 4 },
+  row: { color: palette.text, fontSize: 15, textAlign: "right", borderRightWidth: 3, paddingRight: 10, paddingVertical: 4 },
   input: { borderWidth: 1, borderColor: palette.line, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, fontSize: 16, color: palette.text, textAlign: "right", backgroundColor: palette.surface },
-  empty: { color: palette.muted, fontSize: 13, textAlign: "right" },
+  empty: { color: palette.muted, fontSize: 15, textAlign: "right" },
 });

@@ -15,7 +15,7 @@ export const palette = {
   surfaceMuted: "#F8FAF8",
   line: "#DFE6E1",
   text: "#1B2B40",
-  muted: "#66758A",
-  subtle: "#8B97A5",
+  muted: "#4B5A6E",
+  subtle: "#66758A",
   white: "#FFFFFF",
 };

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Pressable, Switch } from "react-native";
 import { StyleSheet, Text, View } from "react-native";
-import { useFocusEffect } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { backupQuietly } from "@/lib/backup/files";
 import { Button, Card, EmptyState, Header, Metric, Notice, ProgressBar, Screen, SectionTitle, StatusBadge } from "@/components/MarsoodUI";
@@ -12,8 +12,8 @@ import { ItemsTable, type ErrorCode } from "@/components/ItemsTable";
 import { applyPrefs, planForFinish, planForScan, type FeedbackPlan } from "@/lib/feedback";
 import { runHaptic } from "@/lib/haptics";
 import { playAlert } from "@/lib/sound";
-import { Modal } from "react-native";
-import { type InvoiceView, type ItemRow, type ScanKind, type ScanResult, type SessionTotals, type Stats } from "@/lib/core/engine";
+import { Alert, Modal } from "react-native";
+import { type InvoiceView, type ItemRow, type ScanKind, type ScanResult, type SessionStatus, type SessionTotals, type Stats } from "@/lib/core/engine";
 import { codeKey } from "@/lib/core/codes";
 import { STATUS_LABELS, formatClock } from "@/lib/core/format";
 import { useEngine } from "@/lib/core/hooks";
@@ -93,7 +93,11 @@ export default function ScanScreen() {
   const [safeSwitch, setSafeSwitch] = useState(false);
   const [vibrationOn, setVibrationOn] = useState(true);
   const prefsRef = useRef({ sound: true, vibration: true });
-  const [session, setSession] = useState<{ stats: Stats; totals: SessionTotals } | null>(null);
+  const router = useRouter();
+  const [session, setSession] = useState<{ stats: Stats; totals: SessionTotals; approved: boolean } | null>(null);
+  const [status, setStatus] = useState<SessionStatus | null>(null);
+  const [completeModal, setCompleteModal] = useState(false);
+  const completeShown = useRef(false);
   const [lastKey, setLastKey] = useState<string | null>(null);
   const [errorCodes, setErrorCodes] = useState<ErrorCode[]>([]);
   const [closedPrompt, setClosedPrompt] = useState<{ orderKey: string; orderNo: string } | null>(null);
@@ -196,7 +200,17 @@ export default function ScanScreen() {
 
   const refresh = useCallback(async () => {
     if (!engine) return;
-    engine.sessionSummary().then(setSession).catch(() => undefined);
+    engine.sessionStatus().then(setStatus).catch(() => undefined);
+    engine.sessionSummary().then((v) => {
+      setSession(v);
+      if (v.stats.total > 0 && v.stats.remaining === 0 && !v.approved) {
+        // آخر فاتورة انتهت: تنبيه مرئي (والصوتي يُعزف عند الإغلاق) لاعتماد التقرير
+        if (!completeShown.current) {
+          completeShown.current = true;
+          setCompleteModal(true);
+        }
+      } else if (v.stats.remaining > 0) completeShown.current = false;
+    }).catch(() => undefined);
     const key = await engine.getCurrent();
     if (!key) {
       setView(null);
@@ -284,9 +298,83 @@ export default function ScanScreen() {
   const readonly = invoice?.status === "closed";
   const tone = feedback?.tone ?? "info";
 
+  async function startSession() {
+    if (!engine) return;
+    const run = async () => {
+      try {
+        if (status?.status === "ended") backupQuietly(engine, "event");
+        await engine.startSession();
+        setFeedback(null);
+        completeShown.current = false;
+        await refresh();
+      } catch (cause) {
+        setFeedback({ tone: "danger", title: "تعذر بدء الجلسة", body: cause instanceof Error ? cause.message : "خطأ غير متوقع." });
+      }
+    };
+    if (status?.status === "ended") {
+      Alert.alert("بدء جلسة جديدة", "ستُحفظ نسخة احتياطية ثم تُمسح فواتير الجلسة السابقة ومسحاتها من الجهاز (التقارير المصدَّرة تبقى). هل تريد المتابعة؟", [
+        { text: "إلغاء", style: "cancel" },
+        { text: "بدء جلسة جديدة", style: "destructive", onPress: () => void run() },
+      ]);
+    } else await run();
+  }
+
+  async function endSession() {
+    if (!engine) return;
+    try {
+      await engine.endSession();
+      setFeedback({ tone: "success", title: "انتهت الجلسة", body: "التقارير متاحة للاطلاع والتصدير من تبويب التقارير. ابدأ جلسة جديدة عند الحاجة." });
+      await refresh();
+    } catch (cause) {
+      setFeedback({ tone: "danger", title: "تعذر إنهاء الجلسة", body: cause instanceof Error ? cause.message : "خطأ غير متوقع." });
+    }
+  }
+
+  if (!status || status.status !== "active") {
+    const ended = status?.status === "ended";
+    return (
+      <Screen>
+        <Header title="التدقيق" subtitle="ابدأ جلسة تدقيق لتفعيل المسح والاستيراد" />
+        {error ? <Notice title="تعذر فتح قاعدة البيانات" body={error} tone="danger" /> : null}
+        {feedback ? <Notice title={feedback.title} body={feedback.body} tone={tone} /> : null}
+        <Card>
+          <EmptyState
+            icon={ended ? "flag-checkered" : "play-circle-outline"}
+            title={!status ? "جارٍ التحميل…" : ended ? "انتهت الجلسة السابقة" : "لا توجد جلسة نشطة"}
+            body={ended ? "اطّلع على تقاريرها من تبويب التقارير، ثم ابدأ جلسة جديدة." : "اضغط «بدء الجلسة» ثم زامِن أو استورد ملف الفواتير وابدأ المسح."}
+            action={status ? <Button title={ended ? "بدء جلسة جديدة" : "بدء الجلسة"} icon="play" variant="success" onPress={() => void startSession()} /> : undefined}
+          />
+          {ended ? <Button title="الاطلاع على التقارير" icon="file-document-outline" variant="outline" onPress={() => router.navigate("/report" as never)} /> : null}
+        </Card>
+      </Screen>
+    );
+  }
+
+  const sessionComplete = !!session && session.stats.total > 0 && session.stats.remaining === 0;
+
   return (
     <Screen>
-      <Header title="المسح" subtitle="امسح رقم الطلب من البوليصة ثم أصناف الفاتورة" />
+      <Modal visible={completeModal} transparent animationType="fade" onRequestClose={() => setCompleteModal(false)}>
+        <View style={styles.modalBack}>
+          <View style={styles.modalCard}>
+            <MaterialCommunityIcons name="check-decagram" size={56} color={palette.tealDeep} />
+            <Text style={styles.modalTitle}>اكتملت كل فواتير الجلسة</Text>
+            <Text style={styles.modalBody}>انتهت آخر فاتورة. راجع الإجماليات واعتمد التقرير ليُفتح إنهاء الجلسة والاطلاع على التقارير.</Text>
+            <Button title="مراجعة واعتماد التقرير" icon="draw" variant="success" onPress={() => { setCompleteModal(false); router.navigate("/report" as never); }} />
+            <Button title="لاحقاً" variant="outline" onPress={() => setCompleteModal(false)} />
+          </View>
+        </View>
+      </Modal>
+      <Header title="التدقيق" subtitle="امسح رقم الطلب من البوليصة ثم أصناف الفاتورة" />
+      <Card>
+        <View style={styles.sessionActions}>
+          <View style={{ flex: 1, minWidth: 150 }}><Button title="مزامنة" icon="sync" variant="secondary" onPress={() => router.push({ pathname: "/import", params: { mode: "sync" } } as never)} /></View>
+          <View style={{ flex: 1, minWidth: 150 }}><Button title="استيراد ملف جديد" icon="file-upload-outline" variant="outline" onPress={() => router.push({ pathname: "/import", params: { mode: "file" } } as never)} /></View>
+          <View style={{ flex: 1, minWidth: 150 }}><Button title="إنهاء الجلسة" icon="flag-checkered" variant="danger" disabled={!sessionComplete || !session?.approved} onPress={() => void endSession()} /></View>
+        </View>
+        {sessionComplete && !session?.approved ? <Text style={styles.sessionHint}>انتهت كل الفواتير: اعتمد التقرير من تبويب التقارير لتفعيل «إنهاء الجلسة».</Text> : null}
+        {!sessionComplete ? <Text style={styles.sessionHint}>«إنهاء الجلسة» يُفعَّل بعد انتهاء آخر فاتورة واعتماد التقرير.</Text> : null}
+      </Card>
       {error ? <Notice title="تعذر فتح قاعدة البيانات" body={error} tone="danger" /> : null}
       <View style={styles.modeRow}>
         <Pressable onPress={() => setCamera(false)} style={[styles.mode, !camera && styles.modeOn]} accessibilityRole="button">
@@ -494,37 +582,43 @@ const styles = StyleSheet.create({
   shade: { flex: 1, backgroundColor: "rgba(17,35,62,0.55)", justifyContent: "center", alignItems: "center", padding: 24 },
   dialog: { width: "100%", maxWidth: 480, backgroundColor: palette.surface, borderRadius: 22, padding: 22, gap: 12 },
   dialogTitle: { color: palette.ink, fontSize: 20, fontWeight: "900", textAlign: "center" },
-  dialogBody: { color: palette.inkSoft, fontSize: 14, lineHeight: 22, textAlign: "center" },
+  dialogBody: { color: palette.inkSoft, fontSize: 15, lineHeight: 22, textAlign: "center" },
   panes: { flexDirection: "row", gap: 16, alignItems: "flex-start" },
   paneSide: { flex: 2, gap: 16, minWidth: 0 },
   paneMain: { flex: 3, gap: 16, minWidth: 0 },
   modeRow: { flexDirection: "row", gap: 8 },
   mode: { flex: 1, minHeight: 42, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, borderRadius: 12, borderWidth: 1, borderColor: palette.tealDeep, backgroundColor: "#FFFFFF" },
   modeOn: { backgroundColor: palette.tealDeep },
-  modeText: { color: palette.tealDeep, fontWeight: "800", fontSize: 14 },
+  modeText: { color: palette.tealDeep, fontWeight: "800", fontSize: 15 },
   printBar: { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 4 },
-  printText: { flex: 1, fontSize: 13, fontWeight: "800", textAlign: "right" },
-  printRow: { color: palette.inkSoft, fontSize: 12, textAlign: "right" },
+  printText: { flex: 1, fontSize: 15, fontWeight: "800", textAlign: "right" },
+  printRow: { color: palette.inkSoft, fontSize: 14, textAlign: "right" },
   invoiceHead: { flexDirection: "row", alignItems: "center", gap: 12 },
   orderNo: { color: palette.ink, fontSize: 20, fontWeight: "900", textAlign: "right" },
-  invoiceNo: { color: palette.muted, fontSize: 13, textAlign: "right", marginTop: 3 },
+  invoiceNo: { color: palette.muted, fontSize: 15, textAlign: "right", marginTop: 3 },
+  sessionActions: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
+  sessionHint: { color: palette.inkSoft, fontSize: 15, textAlign: "right" },
+  modalBack: { flex: 1, backgroundColor: "rgba(11,59,74,0.7)", alignItems: "center", justifyContent: "center", padding: 20 },
+  modalCard: { width: "100%", maxWidth: 440, backgroundColor: "#FFFFFF", borderRadius: 22, padding: 24, gap: 14, alignItems: "stretch" },
+  modalTitle: { color: palette.ink, fontSize: 22, fontWeight: "900", textAlign: "center" },
+  modalBody: { color: palette.inkSoft, fontSize: 16, lineHeight: 25, textAlign: "center" },
   sessionRow: { flexDirection: "row", alignItems: "center", gap: 10, flexWrap: "wrap" },
   sessionBig: { minWidth: 110, alignItems: "center" },
   sessionPercent: { color: palette.tealDeep, fontSize: 40, fontWeight: "900" },
   sessionCell: { flex: 1, minWidth: 80, alignItems: "center" },
   sessionNum: { color: palette.ink, fontSize: 24, fontWeight: "900" },
-  sessionLabel: { color: palette.muted, fontSize: 12, fontWeight: "800" },
+  sessionLabel: { color: palette.muted, fontSize: 14, fontWeight: "800" },
   percent: { color: palette.tealDeep, fontSize: 30, fontWeight: "900" },
-  progressText: { color: palette.inkSoft, fontSize: 13, textAlign: "right" },
+  progressText: { color: palette.inkSoft, fontSize: 15, textAlign: "right" },
   metricRow: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
   actions: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
   action: { flexGrow: 1, minWidth: 200 },
   tableHead: { flexDirection: "row", gap: 8, paddingBottom: 8, borderBottomWidth: 1, borderBottomColor: palette.line },
-  th: { color: palette.muted, fontSize: 12, fontWeight: "800", textAlign: "right" },
+  th: { color: palette.muted, fontSize: 14, fontWeight: "800", textAlign: "right" },
   tr: { flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 9, borderBottomWidth: 1, borderBottomColor: palette.line },
-  td: { color: palette.text, fontSize: 15, textAlign: "right" },
+  td: { color: palette.text, fontSize: 16, textAlign: "right" },
   recentRow: { flexDirection: "row", alignItems: "center", gap: 8 },
-  recentKind: { fontSize: 12, fontWeight: "800", width: 82, textAlign: "right" },
-  recentCode: { flex: 1, color: palette.text, fontSize: 14, textAlign: "right" },
-  recentTime: { color: palette.muted, fontSize: 12 },
+  recentKind: { fontSize: 14, fontWeight: "800", width: 82, textAlign: "right" },
+  recentCode: { flex: 1, color: palette.text, fontSize: 15, textAlign: "right" },
+  recentTime: { color: palette.muted, fontSize: 14 },
 });

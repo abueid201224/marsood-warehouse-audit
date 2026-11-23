@@ -203,3 +203,50 @@ describe("المرحلة 2: العرض والاعتماد", () => {
     expect((await e.errorReport()).approval).toBeNull();
   });
 });
+
+describe("دورة حياة الجلسة", () => {
+  it("بيانات قديمة بلا حالة تُعدّ نشطة، وقاعدة فارغة idle", async () => {
+    const e = await makeEngine();
+    expect((await e.sessionStatus()).status).toBe("idle");
+    await e.importRows([row(A, "I1", "1001", 1)], "x.xlsx");
+    expect((await e.sessionStatus()).status).toBe("active");
+  });
+
+  it("البدء ثم الإنهاء بعد الاعتماد فقط، ثم جلسة جديدة تمسح القديمة", async () => {
+    const e = await makeEngine();
+    const started = await e.startSession();
+    expect(started.status).toBe("active");
+    expect(started.id).toMatch(/^S\d{14}-/);
+    await expect(e.startSession()).rejects.toThrow(); // نشطة بالفعل
+    await expect(e.endSession()).rejects.toThrow(); // لا فواتير/لا اعتماد
+    await e.importRows([row(A, "I1", "1001", 1)], "x.xlsx");
+    await expect(e.endSession()).rejects.toThrow(); // فاتورة متبقية
+    await e.handleScan(A);
+    await e.handleScan("1001");
+    await e.finishCurrent("close");
+    await expect(e.endSession()).rejects.toThrow(); // لم يُعتمد
+    await e.approveSession("أحمد");
+    const ended = await e.endSession();
+    expect(ended.status).toBe("ended");
+    expect(ended.endedAt).not.toBeNull();
+    // التقرير يبقى متاحاً بعد الإنهاء
+    expect((await e.errorReport()).approval?.name).toBe("أحمد");
+    const next = await e.startSession();
+    expect(next.status).toBe("active");
+    expect(next.id).not.toBe(started.id);
+    expect((await e.getStats()).total).toBe(0);
+    expect((await e.errorReport()).approval).toBeNull();
+  });
+});
+
+describe("القائمة الجانبية", () => {
+  it("مطابقة المسار النشط", async () => {
+    const { isActive } = await import("../lib/nav");
+    expect(isActive("/", "/")).toBe(true);
+    expect(isActive("/index", "/")).toBe(true);
+    expect(isActive("/scan", "/")).toBe(false);
+    expect(isActive("/scan", "/scan")).toBe(true);
+    expect(isActive("/scanner", "/scan")).toBe(false);
+    expect(isActive("/report/x", "/report")).toBe(true);
+  });
+});

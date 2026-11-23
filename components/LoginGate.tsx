@@ -87,12 +87,12 @@ export function LoginGate({ engine }: { engine: AuditEngine }) {
 const styles = StyleSheet.create({
   card: { alignSelf: "center", width: "100%", maxWidth: 460, gap: 14, alignItems: "stretch", padding: 22, marginTop: 24, borderRadius: 20, borderWidth: 1, borderColor: "#CBD5E1", backgroundColor: "#FFFFFF" },
   title: { color: palette.ink, fontSize: 22, fontWeight: "900", textAlign: "center" },
-  sub: { color: palette.muted, fontSize: 14, lineHeight: 22, textAlign: "center" },
+  sub: { color: palette.muted, fontSize: 15, lineHeight: 22, textAlign: "center" },
   input: { borderWidth: 1, borderColor: palette.line, backgroundColor: "#FFFFFF", borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12, color: palette.ink, fontSize: 17 },
   chips: { flexDirection: "row", flexWrap: "wrap", gap: 8, justifyContent: "center" },
   chip: { borderWidth: 1, borderColor: palette.tealDeep, borderRadius: 999, paddingHorizontal: 14, paddingVertical: 8, backgroundColor: "#FFFFFF" },
   chipOn: { backgroundColor: palette.tealDeep },
-  chipText: { color: palette.tealDeep, fontWeight: "800", fontSize: 14 },
+  chipText: { color: palette.tealDeep, fontWeight: "800", fontSize: 15 },
   action: { minHeight: 52, borderRadius: 14, backgroundColor: "#0B3B4A", alignItems: "center", justifyContent: "center", paddingHorizontal: 16 },
   actionText: { color: "#FFFFFF", fontSize: 16, fontWeight: "800" },
 });

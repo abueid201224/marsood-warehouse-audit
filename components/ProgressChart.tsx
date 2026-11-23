@@ -58,6 +58,6 @@ const styles = StyleSheet.create({
   legend: { flexDirection: "row", gap: 18, flexWrap: "wrap", justifyContent: "flex-end" },
   legendItem: { flexDirection: "row", alignItems: "center", gap: 6 },
   swatch: { width: 14, height: 4, borderRadius: 2 },
-  legendText: { color: palette.inkSoft, fontSize: 12, fontWeight: "700" },
-  hint: { color: palette.muted, fontSize: 12, textAlign: "center" },
+  legendText: { color: palette.inkSoft, fontSize: 14, fontWeight: "700" },
+  hint: { color: palette.muted, fontSize: 14, textAlign: "center" },
 });
